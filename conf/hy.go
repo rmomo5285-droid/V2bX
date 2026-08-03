@@ -5,7 +5,8 @@ type Hysteria2Config struct {
 }
 
 type Hysteria2LogConfig struct {
-	Level string `json:"Level"`
+	Level  string `json:"Level"`
+	Output string `json:"Output"`
 }
 
 func NewHysteria2Config() *Hysteria2Config {

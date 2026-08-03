@@ -36,7 +36,7 @@ func New(c *conf.ApiConfig) (*Client, error) {
 		client = resty.NewWithLocalAddr(&net.TCPAddr{
 			IP: net.ParseIP(c.APISendIP),
 		})
-	} else {	
+	} else {
 		client = resty.New()
 	}
 	client.SetRetryCount(3)
@@ -48,9 +48,7 @@ func New(c *conf.ApiConfig) (*Client, error) {
 	client.OnError(func(req *resty.Request, err error) {
 		var v *resty.ResponseError
 		if errors.As(err, &v) {
-			// v.Response contains the last response from the server
-			// v.Err contains the original error
-			logrus.Error(v.Err)
+			logrus.Error(redactSensitiveText(v.Err.Error(), c.Key))
 		}
 	})
 	client.SetBaseURL(c.APIHost)

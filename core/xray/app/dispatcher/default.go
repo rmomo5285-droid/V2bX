@@ -187,7 +187,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			network == net.Network_TCP,
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
-			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
+			if shouldLog, suppressed := limit.ShouldLogRejection(user.Email, "connection_or_device_limit"); shouldLog {
+				errors.LogInfo(ctx, "Rejected user ", user.Email,
+					" source ", sessionInbound.Source.Address.IP().String(),
+					": reason=connection_or_device_limit suppressed=", suppressed)
+			}
 			common.Close(outboundLink.Writer)
 			common.Close(inboundLink.Writer)
 			common.Interrupt(outboundLink.Reader)
@@ -383,7 +387,11 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			destination.Network == net.Network_TCP,
 			sessionInbound.Source.Network == net.Network_TCP)
 		if reject {
-			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
+			if shouldLog, suppressed := limit.ShouldLogRejection(user.Email, "connection_or_device_limit"); shouldLog {
+				errors.LogInfo(ctx, "Rejected user ", user.Email,
+					" source ", sessionInbound.Source.Address.IP().String(),
+					": reason=connection_or_device_limit suppressed=", suppressed)
+			}
 			common.Close(outbound.Writer)
 			common.Interrupt(outbound.Reader)
 			return errors.New("Limited ", user.Email, " by conn or ip")
@@ -539,25 +547,63 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			} else {
 				destStr = destination.Address.IP().String()
 			}
+			destinationKey := fmt.Sprintf("%s:%d", destStr, destination.Port)
+			if strings.Contains(destStr, ":") {
+				destinationKey = fmt.Sprintf("[%s]:%d", destStr, destination.Port)
+			}
+			if reason, reject := limiter.CheckSafetyDestination(destination.Network.String(), destinationKey); reject {
+				if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, "safety:"+reason); shouldLog {
+					errors.LogError(ctx, fmt.Sprintf(
+						"Node safety rule rejected user %s target %s: reason=%s suppressed=%d",
+						sessionInbound.User.Email,
+						destinationKey,
+						reason,
+						suppressed))
+				}
+				common.Close(link.Writer)
+				common.Interrupt(link.Reader)
+				return
+			}
 			if l.CheckDomainRule(destStr) {
-				errors.LogError(ctx, fmt.Sprintf(
-					"User %s access domain %s reject by rule",
-					sessionInbound.User.Email,
-					destStr))
+				if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, "panel_domain"); shouldLog {
+					errors.LogError(ctx, fmt.Sprintf(
+						"Panel rule rejected user %s target %s: reason=panel_domain suppressed=%d",
+						sessionInbound.User.Email,
+						destStr,
+						suppressed))
+				}
 				common.Close(link.Writer)
 				common.Interrupt(link.Reader)
 				return
 			}
 			if len(protocol) != 0 {
 				if l.CheckProtocolRule(protocol) {
-					errors.LogError(ctx, fmt.Sprintf(
-						"User %s access protocol %s reject by rule",
-						sessionInbound.User.Email,
-						protocol))
+					if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, "panel_protocol:"+protocol); shouldLog {
+						errors.LogError(ctx, fmt.Sprintf(
+							"Panel protocol rule rejected user %s target %s: reason=panel_protocol suppressed=%d",
+							sessionInbound.User.Email,
+							protocol,
+							suppressed))
+					}
 					common.Close(link.Writer)
 					common.Interrupt(link.Reader)
 					return
 				}
+			}
+			if decision := l.CheckOutbound(sessionInbound.User.Email, destinationKey); decision.Reject {
+				if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, "abuse:"+decision.Reason); shouldLog {
+					errors.LogError(ctx, fmt.Sprintf(
+						"Abuse guard rejected user %s target %s: reason=%s count=%d blocked_until=%s suppressed=%d",
+						sessionInbound.User.Email,
+						destinationKey,
+						decision.Reason,
+						decision.Count,
+						decision.BlockedUntil.UTC().Format(time.RFC3339),
+						suppressed))
+				}
+				common.Close(link.Writer)
+				common.Interrupt(link.Reader)
+				return
 			}
 		}
 	}

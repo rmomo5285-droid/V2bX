@@ -107,18 +107,33 @@ func (l *Lego) CreateCert() (err error) {
 }
 
 func (l *Lego) RenewCert() error {
-	file, err := os.ReadFile(l.config.CertFile)
+	certPath := l.parseParams(l.config.CertFile)
+	keyPath := l.parseParams(l.config.KeyFile)
+	pair, certPEM, keyPEM, err := readCertificatePair(certPath, keyPath)
 	if err != nil {
-		return fmt.Errorf("read cert file error: %s", err)
-	}
-	if e, err := l.CheckCert(file); !e {
+		if createErr := l.CreateCert(); createErr != nil {
+			return fmt.Errorf("replace unusable certificate (%v): %w", err, createErr)
+		}
 		return nil
-	} else if err != nil {
+	}
+	matches, err := certificatePairMatchesDomain(pair, l.config.CertDomain)
+	if err != nil || !matches {
+		if createErr := l.CreateCert(); createErr != nil {
+			return fmt.Errorf("replace certificate for wrong domain (%v): %w", err, createErr)
+		}
+		return nil
+	}
+	due, err := l.CheckCert(certPEM)
+	if err != nil {
 		return fmt.Errorf("check cert error: %s", err)
+	}
+	if !due {
+		return nil
 	}
 	res, err := l.client.Certificate.Renew(certificate.Resource{
 		Domain:      l.config.CertDomain,
-		Certificate: file,
+		PrivateKey:  keyPEM,
+		Certificate: certPEM,
 	}, true, false, "")
 	if err != nil {
 		return err
@@ -147,23 +162,17 @@ func (l *Lego) parseParams(path string) string {
 	return r.Replace(path)
 }
 func (l *Lego) writeCert(certificates *certificate.Resource) error {
-	err := checkPath(l.config.CertFile)
+	certPath := l.parseParams(l.config.CertFile)
+	keyPath := l.parseParams(l.config.KeyFile)
+	err := checkPath(certPath)
 	if err != nil {
 		return fmt.Errorf("check path error: %s", err)
 	}
-	err = os.WriteFile(l.parseParams(l.config.CertFile), certificates.Certificate, 0644)
-	if err != nil {
-		return err
-	}
-	err = checkPath(l.config.KeyFile)
+	err = checkPath(keyPath)
 	if err != nil {
 		return fmt.Errorf("check path error: %s", err)
 	}
-	err = os.WriteFile(l.parseParams(l.config.KeyFile), certificates.PrivateKey, 0644)
-	if err != nil {
-		return err
-	}
-	return nil
+	return writeCertificatePair(certPath, keyPath, certificates.Certificate, certificates.PrivateKey)
 }
 
 type User struct {

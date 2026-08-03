@@ -4,16 +4,15 @@ import (
 	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
-	"github.com/InazumaV/V2bX/common/format"
 )
 
 func (l *Limiter) AddDynamicSpeedLimit(tag string, userInfo *panel.UserInfo, limitNum int, expire int64) error {
-	userLimit := &UserLimitInfo{
-		DynamicSpeedLimit: limitNum,
-		ExpireTime:        time.Now().Add(time.Duration(expire) * time.Second).Unix(),
-	}
-	l.UserLimitInfo.Store(format.UserTag(tag, userInfo.Uuid), userLimit)
-	return nil
+	return l.UpdateDynamicSpeedLimit(
+		tag,
+		userInfo.Uuid,
+		limitNum,
+		time.Now().Add(time.Duration(expire)*time.Second),
+	)
 }
 
 // determineSpeedLimit returns the minimum non-zero rate

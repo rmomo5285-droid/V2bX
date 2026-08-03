@@ -1,18 +1,18 @@
 package node
 
 import (
-	"log"
 	"os"
 	"testing"
 
 	"github.com/InazumaV/V2bX/conf"
 )
 
-var l *Lego
-
-func init() {
-	var err error
-	l, err = NewLego(&conf.CertConfig{
+func integrationLego(t *testing.T) *Lego {
+	t.Helper()
+	if os.Getenv("V2BX_ACME_INTEGRATION") != "1" {
+		t.Skip("set V2BX_ACME_INTEGRATION=1 to run live ACME tests")
+	}
+	l, err := NewLego(&conf.CertConfig{
 		CertMode:   "dns",
 		Email:      "test@test.com",
 		CertDomain: "test.test.com",
@@ -24,18 +24,19 @@ func init() {
 		KeyFile:  "./cert/1.key",
 	})
 	if err != nil {
-		log.Println(err)
-		os.Exit(1)
+		t.Fatal(err)
 	}
+	return l
 }
 
 func TestLego_CreateCertByDns(t *testing.T) {
-	err := l.CreateCert()
-	if err != nil {
-		t.Error(err)
+	if err := integrationLego(t).CreateCert(); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestLego_RenewCert(t *testing.T) {
-	log.Println(l.RenewCert())
+	if err := integrationLego(t).RenewCert(); err != nil {
+		t.Fatal(err)
+	}
 }

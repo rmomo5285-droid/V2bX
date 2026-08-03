@@ -5,10 +5,23 @@ type LimitConfig struct {
 	SpeedLimit              int                      `json:"SpeedLimit"`
 	IPLimit                 int                      `json:"DeviceLimit"`
 	ConnLimit               int                      `json:"ConnLimit"`
+	AbuseGuardConfig        *AbuseGuardConfig        `json:"AbuseGuardConfig"`
 	EnableIpRecorder        bool                     `json:"EnableIpRecorder"`
 	IpRecorderConfig        *IpReportConfig          `json:"IpRecorderConfig"`
 	EnableDynamicSpeedLimit bool                     `json:"EnableDynamicSpeedLimit"`
 	DynamicSpeedLimitConfig *DynamicSpeedLimitConfig `json:"DynamicSpeedLimitConfig"`
+}
+
+type AbuseGuardConfig struct {
+	Enable                  bool `json:"Enable"`
+	WindowSeconds           int  `json:"WindowSeconds"`
+	MaxClientConnections    int  `json:"MaxClientConnections"`
+	MaxOutboundConnections  int  `json:"MaxOutboundConnections"`
+	MaxDistinctDestinations int  `json:"MaxDistinctDestinations"`
+	MaxDistinctIPTargets    int  `json:"MaxDistinctIPTargets"`
+	MaxDistinctPorts        int  `json:"MaxDistinctPorts"`
+	BlockSeconds            int  `json:"BlockSeconds"`
+	MaxTrackedUsers         int  `json:"MaxTrackedUsers"`
 }
 
 type RecorderConfig struct {

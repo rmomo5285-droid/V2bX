@@ -1,8 +1,6 @@
 package node
 
 import (
-	"strconv"
-
 	"github.com/InazumaV/V2bX/api/panel"
 	log "github.com/sirupsen/logrus"
 )
@@ -60,14 +58,27 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 }
 
 func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo) {
-	oldMap := make(map[string]int)
+	type userKey struct {
+		id          int
+		uuid        string
+		speedLimit  int
+		deviceLimit int
+	}
+	keyFor := func(user panel.UserInfo) userKey {
+		return userKey{
+			id:          user.Id,
+			uuid:        user.Uuid,
+			speedLimit:  user.SpeedLimit,
+			deviceLimit: user.DeviceLimit,
+		}
+	}
+	oldMap := make(map[userKey]int)
 	for i, user := range old {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		oldMap[key] = i
+		oldMap[keyFor(user)] = i
 	}
 
 	for _, user := range new {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
+		key := keyFor(user)
 		if _, exists := oldMap[key]; !exists {
 			added = append(added, user)
 		} else {

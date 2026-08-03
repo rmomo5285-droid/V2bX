@@ -13,6 +13,7 @@ import (
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/conf"
+	certloader "github.com/InazumaV/V2bX/node"
 	"github.com/apernet/hysteria/core/v2/server"
 	"github.com/apernet/hysteria/extras/v2/correctnet"
 	"github.com/apernet/hysteria/extras/v2/masq"
@@ -64,7 +65,7 @@ func (n *Hysteria2node) getTLSConfig(config *conf.Options) (*server.TLSConfig, e
 		return nil, fmt.Errorf("the CertMode cannot be none")
 	default:
 		var certs []tls.Certificate
-		cert, err := tls.LoadX509KeyPair(config.CertConfig.CertFile, config.CertConfig.KeyFile)
+		cert, err := certloader.LoadCertificatePair(config.CertConfig.CertFile, config.CertConfig.KeyFile)
 		if err != nil {
 			return nil, err
 		}
@@ -72,7 +73,7 @@ func (n *Hysteria2node) getTLSConfig(config *conf.Options) (*server.TLSConfig, e
 		return &server.TLSConfig{
 			Certificates: certs,
 			GetCertificate: func(tlsinfo *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				cert, err := tls.LoadX509KeyPair(config.CertConfig.CertFile, config.CertConfig.KeyFile)
+				cert, err := certloader.LoadCertificatePair(config.CertConfig.CertFile, config.CertConfig.KeyFile)
 				return &cert, err
 			},
 		}, nil
@@ -86,7 +87,7 @@ func (n *Hysteria2node) getQUICConfig(config *serverConfig) (*server.QUICConfig,
 	} else if config.QUIC.InitStreamReceiveWindow < 16384 {
 		return nil, fmt.Errorf("QUICConfig.InitialStreamReceiveWindowf must be at least 16384")
 	} else {
-		quic.InitialConnectionReceiveWindow = config.QUIC.InitConnectionReceiveWindow
+		quic.InitialStreamReceiveWindow = config.QUIC.InitStreamReceiveWindow
 	}
 	if config.QUIC.MaxStreamReceiveWindow == 0 {
 		quic.MaxStreamReceiveWindow = defaultStreamReceiveWindow
@@ -124,7 +125,7 @@ func (n *Hysteria2node) getQUICConfig(config *serverConfig) (*server.QUICConfig,
 		quic.MaxIncomingStreams = config.QUIC.MaxIncomingStreams
 	}
 	// todo fix !linux && !windows && !darwin
-	quic.DisablePathMTUDiscovery = false
+	quic.DisablePathMTUDiscovery = config.QUIC.DisablePathMTUDiscovery
 
 	return quic, nil
 }
@@ -393,23 +394,36 @@ func (n *Hysteria2node) getHyConfig(info *panel.NodeInfo, config *conf.Options, 
 	if err != nil {
 		return nil, err
 	}
-	sniff, err := n.getRequestHook(c)
+	keepConn := false
+	defer func() {
+		if !keepConn {
+			_ = conn.Close()
+		}
+	}()
+	sniffHook, err := n.getRequestHook(c)
 	if err != nil {
 		return nil, err
 	}
+	streamUsers := n.TrafficLogger.(*HookServer).StreamUsers
+	requestHook := newPolicyRequestHook(n.Tag, sniffHook, streamUsers, n.Logger)
 	Outbound, err := n.getOutboundConfig(c)
 	if err != nil {
 		return nil, err
+	}
+	Outbound = &panelRuleOutbound{
+		tag:      n.Tag,
+		outbound: Outbound,
+		logger:   n.Logger,
 	}
 	Masq, err := n.getMasqHandler(tls, conn, c)
 	if err != nil {
 		return nil, err
 	}
-	return &server.Config{
+	result := &server.Config{
 		TLSConfig:             *tls,
 		QUICConfig:            *quic,
 		Conn:                  conn,
-		RequestHook:           sniff,
+		RequestHook:           requestHook,
 		Outbound:              Outbound,
 		BandwidthConfig:       *n.getBandwidthConfig(info),
 		IgnoreClientBandwidth: info.Hysteria2.Ignore_Client_Bandwidth,
@@ -418,7 +432,9 @@ func (n *Hysteria2node) getHyConfig(info *panel.NodeInfo, config *conf.Options, 
 		EventLogger:           n.EventLogger,
 		TrafficLogger:         n.TrafficLogger,
 		MasqHandler:           Masq,
-	}, nil
+	}
+	keepConn = true
+	return result, nil
 }
 
 func runMasqTCPServer(s *masq.MasqTCPServer, httpAddr, httpsAddr string, logger *zap.Logger) {

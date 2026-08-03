@@ -17,12 +17,19 @@ type HookServer struct {
 	logger                *zap.Logger
 	Counter               sync.Map
 	ReportMinTrafficBytes int64
+	StreamUsers           *hy2StreamUsers
 }
 
 func (h *HookServer) TraceStream(stream server.HyStream, stats *server.StreamStats) {
+	if h.StreamUsers != nil {
+		h.StreamUsers.Store(stream, stats.AuthID)
+	}
 }
 
 func (h *HookServer) UntraceStream(stream server.HyStream) {
+	if h.StreamUsers != nil {
+		h.StreamUsers.Delete(stream)
+	}
 }
 
 func (h *HookServer) LogTraffic(id string, tx, rx uint64) (ok bool) {
@@ -38,10 +45,12 @@ func (h *HookServer) LogTraffic(id string, tx, rx uint64) (ok bool) {
 	userLimit, ok := limiterinfo.UserLimitInfo.Load(format.UserTag(h.Tag, id))
 	if ok {
 		userlimitInfo := userLimit.(*limiter.UserLimitInfo)
-		if userlimitInfo.OverLimit {
-			userlimitInfo.OverLimit = false
+		if userlimitInfo.OverLimit.Swap(false) {
 			return false
 		}
+	}
+	if decision := limiterinfo.CheckAbuseBlocked(format.UserTag(h.Tag, id)); decision.Reject {
+		return false
 	}
 
 	if c, exists = h.Counter.Load(h.Tag); !exists {

@@ -4,7 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"reflect"
+	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -149,6 +150,93 @@ type Rules struct {
 	Protocol []string
 }
 
+func routeMatches(match interface{}) ([]string, error) {
+	var matches []string
+	switch value := match.(type) {
+	case string:
+		matches = strings.Split(value, ",")
+	case []string:
+		matches = append(matches, value...)
+	case []interface{}:
+		matches = make([]string, 0, len(value))
+		for _, item := range value {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("route match must contain strings, got %T", item)
+			}
+			matches = append(matches, text)
+		}
+	default:
+		return nil, fmt.Errorf("route match must be a string or string array, got %T", match)
+	}
+
+	result := matches[:0]
+	for _, match := range matches {
+		if match = strings.TrimSpace(match); match != "" {
+			result = append(result, match)
+		}
+	}
+	return result, nil
+}
+
+func normalizeDomainRule(match string) (string, error) {
+	match = strings.TrimSpace(match)
+	if strings.HasPrefix(match, "regexp:") {
+		pattern := strings.TrimSpace(strings.TrimPrefix(match, "regexp:"))
+		if pattern == "" {
+			return "", fmt.Errorf("empty regexp rule")
+		}
+		return pattern, nil
+	}
+
+	match = strings.TrimPrefix(match, "domain:")
+	match = strings.TrimSpace(match)
+	match = strings.TrimPrefix(match, "*.")
+	match = strings.Trim(match, ".")
+	if match == "" {
+		return "", fmt.Errorf("empty domain rule")
+	}
+	if ip := net.ParseIP(match); ip != nil {
+		return "^" + regexp.QuoteMeta(ip.String()) + "$", nil
+	}
+	match = strings.ToLower(match)
+	return `(?i)(?:^|\.)` + regexp.QuoteMeta(match) + `\.?$`, nil
+}
+
+func appendBlockRules(rules *Rules, matches []string) error {
+	domains := make(map[string]struct{}, len(rules.Regexp))
+	protocols := make(map[string]struct{}, len(rules.Protocol))
+	for _, rule := range rules.Regexp {
+		domains[rule] = struct{}{}
+	}
+	for _, protocol := range rules.Protocol {
+		protocols[protocol] = struct{}{}
+	}
+
+	for _, match := range matches {
+		if strings.HasPrefix(match, "protocol:") {
+			protocol := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(match, "protocol:")))
+			if protocol == "" {
+				return fmt.Errorf("empty protocol rule")
+			}
+			if _, exists := protocols[protocol]; !exists {
+				rules.Protocol = append(rules.Protocol, protocol)
+				protocols[protocol] = struct{}{}
+			}
+			continue
+		}
+		pattern, err := normalizeDomainRule(match)
+		if err != nil {
+			return err
+		}
+		if _, exists := domains[pattern]; !exists {
+			rules.Regexp = append(rules.Regexp, pattern)
+			domains[pattern] = struct{}{}
+		}
+	}
+	return nil
+}
+
 func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	const path = "/api/v1/server/UniProxy/config"
 	r, err := c.client.
@@ -263,50 +351,51 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		node.Hysteria2 = rsp
 		node.Security = Tls
 	}
+	if cm == nil {
+		return nil, fmt.Errorf("unsupported node type %q", c.NodeType)
+	}
+	if cm.BaseConfig == nil {
+		return nil, fmt.Errorf("node response is missing base_config")
+	}
 
 	// parse rules and dns
 	for i := range cm.Routes {
-		var matchs []string
-		if _, ok := cm.Routes[i].Match.(string); ok {
-			matchs = strings.Split(cm.Routes[i].Match.(string), ",")
-		} else if _, ok = cm.Routes[i].Match.([]string); ok {
-			matchs = cm.Routes[i].Match.([]string)
-		} else {
-			temp := cm.Routes[i].Match.([]interface{})
-			matchs = make([]string, len(temp))
-			for i := range temp {
-				matchs[i] = temp[i].(string)
-			}
+		matches, matchErr := routeMatches(cm.Routes[i].Match)
+		if matchErr != nil {
+			return nil, fmt.Errorf("parse route %d matches: %w", cm.Routes[i].Id, matchErr)
 		}
 		switch cm.Routes[i].Action {
 		case "block":
-			for _, v := range matchs {
-				if strings.HasPrefix(v, "protocol:") {
-					// protocol
-					node.Rules.Protocol = append(node.Rules.Protocol, strings.TrimPrefix(v, "protocol:"))
-				} else {
-					// domain
-					node.Rules.Regexp = append(node.Rules.Regexp, strings.TrimPrefix(v, "regexp:"))
-				}
+			if err := appendBlockRules(&node.Rules, matches); err != nil {
+				return nil, fmt.Errorf("parse route %d block rule: %w", cm.Routes[i].Id, err)
 			}
 		case "dns":
 			var domains []string
-			domains = append(domains, matchs...)
-			if matchs[0] != "main" {
+			domains = append(domains, matches...)
+			if len(matches) == 0 {
+				return nil, fmt.Errorf("parse route %d dns rule: empty matches", cm.Routes[i].Id)
+			}
+			if matches[0] != "main" {
 				node.RawDNS.DNSMap[strconv.Itoa(i)] = map[string]interface{}{
 					"address": cm.Routes[i].ActionValue,
 					"domains": domains,
 				}
 			} else {
-				dns := []byte(strings.Join(matchs[1:], ""))
+				dns := []byte(strings.Join(matches[1:], ""))
 				node.RawDNS.DNSJson = dns
 			}
 		}
 	}
 
 	// set interval
-	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)
-	node.PullInterval = intervalToTime(cm.BaseConfig.PullInterval)
+	node.PushInterval, err = intervalToTime(cm.BaseConfig.PushInterval)
+	if err != nil {
+		return nil, fmt.Errorf("parse push interval: %w", err)
+	}
+	node.PullInterval, err = intervalToTime(cm.BaseConfig.PullInterval)
+	if err != nil {
+		return nil, fmt.Errorf("parse pull interval: %w", err)
+	}
 
 	node.Common = cm
 	// clear
@@ -316,16 +405,29 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	return node, nil
 }
 
-func intervalToTime(i interface{}) time.Duration {
-	switch reflect.TypeOf(i).Kind() {
-	case reflect.Int:
-		return time.Duration(i.(int)) * time.Second
-	case reflect.String:
-		i, _ := strconv.Atoi(i.(string))
-		return time.Duration(i) * time.Second
-	case reflect.Float64:
-		return time.Duration(i.(float64)) * time.Second
+func intervalToTime(value interface{}) (time.Duration, error) {
+	var seconds int64
+	switch value := value.(type) {
+	case int:
+		seconds = int64(value)
+	case int64:
+		seconds = value
+	case float64:
+		if value != float64(int64(value)) {
+			return 0, fmt.Errorf("interval must be a whole number, got %v", value)
+		}
+		seconds = int64(value)
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid interval %q: %w", value, err)
+		}
+		seconds = parsed
 	default:
-		return time.Duration(reflect.ValueOf(i).Int()) * time.Second
+		return 0, fmt.Errorf("unsupported interval type %T", value)
 	}
+	if seconds <= 0 {
+		return 0, fmt.Errorf("interval must be positive, got %d", seconds)
+	}
+	return time.Duration(seconds) * time.Second, nil
 }

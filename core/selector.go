@@ -66,7 +66,7 @@ func isSupported(protocol string, protocols []string) bool {
 	return false
 }
 
-func (s *Selector) AddNode(tag string, info *panel.NodeInfo, option *conf.Options) error {
+func (s *Selector) AddNode(tag string, info *panel.NodeInfo, option *conf.Options) (err error) {
 	var core Core
 	if len(option.CoreName) > 0 {
 		// use name to select core
@@ -97,11 +97,28 @@ func (s *Selector) AddNode(tag string, info *panel.NodeInfo, option *conf.Option
 		}
 		option.RawOptions = nil
 	}
-	err := core.AddNode(tag, info, option)
-	if err != nil {
-		return err
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			addErr := fmt.Errorf("add node %q panic: %v", tag, recovered)
+			err = errors.Join(addErr, cleanupFailedNode(core, tag))
+		}
+	}()
+	if err = core.AddNode(tag, info, option); err != nil {
+		return errors.Join(err, cleanupFailedNode(core, tag))
 	}
 	s.nodes.Store(tag, core)
+	return nil
+}
+
+func cleanupFailedNode(core Core, tag string) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("cleanup failed node %q panic: %v", tag, recovered)
+		}
+	}()
+	if cleanupErr := core.DelNode(tag); cleanupErr != nil {
+		return fmt.Errorf("cleanup failed node %q: %w", tag, cleanupErr)
+	}
 	return nil
 }
 

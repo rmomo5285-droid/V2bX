@@ -2,9 +2,11 @@ package limiter
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
@@ -21,6 +23,10 @@ func Init() {
 }
 
 type Limiter struct {
+	ruleMu        sync.RWMutex
+	userStateMu   sync.RWMutex
+	abuse         *abuseGuard
+	audit         *rejectionAudit
 	DomainRules   []*regexp.Regexp
 	ProtocolRules []string
 	SpeedLimit    int
@@ -33,35 +39,30 @@ type Limiter struct {
 }
 
 type UserLimitInfo struct {
+	mu                sync.Mutex
 	UID               int
 	SpeedLimit        int
 	DeviceLimit       int
 	DynamicSpeedLimit int
 	ExpireTime        int64
-	OverLimit         bool
+	OverLimit         atomic.Bool
 }
 
 func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveList map[int]int) *Limiter {
 	info := &Limiter{
 		SpeedLimit:    l.SpeedLimit,
+		abuse:         newAbuseGuard(l.AbuseGuardConfig),
+		audit:         newRejectionAudit(l.AbuseGuardConfig),
 		UserOnlineIP:  new(sync.Map),
 		UserLimitInfo: new(sync.Map),
 		SpeedLimiter:  new(sync.Map),
-		AliveList:     aliveList,
+		AliveList:     cloneIntMap(aliveList),
 		OldUserOnline: new(sync.Map),
 	}
 	uuidmap := make(map[string]int)
 	for i := range users {
 		uuidmap[users[i].Uuid] = users[i].Id
-		userLimit := &UserLimitInfo{}
-		userLimit.UID = users[i].Id
-		if users[i].SpeedLimit != 0 {
-			userLimit.SpeedLimit = users[i].SpeedLimit
-		}
-		if users[i].DeviceLimit != 0 {
-			userLimit.DeviceLimit = users[i].DeviceLimit
-		}
-		userLimit.OverLimit = false
+		userLimit := newUserLimitInfo(users[i])
 		info.UserLimitInfo.Store(format.UserTag(tag, users[i].Uuid), userLimit)
 	}
 	info.UUIDtoUID = uuidmap
@@ -88,35 +89,182 @@ func DeleteLimiter(tag string) {
 }
 
 func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {
+	l.userStateMu.Lock()
+	defer l.userStateMu.Unlock()
+
 	for i := range deleted {
-		l.UserLimitInfo.Delete(format.UserTag(tag, deleted[i].Uuid))
-		l.UserOnlineIP.Delete(format.UserTag(tag, deleted[i].Uuid))
-		l.SpeedLimiter.Delete(format.UserTag(tag, deleted[i].Uuid))
-		delete(l.UUIDtoUID, deleted[i].Uuid)
-		delete(l.AliveList, deleted[i].Id)
+		l.removeUserLocked(tag, deleted[i])
 	}
 	for i := range added {
-		userLimit := &UserLimitInfo{
-			UID: added[i].Id,
-		}
-		if added[i].SpeedLimit != 0 {
-			userLimit.SpeedLimit = added[i].SpeedLimit
-			userLimit.ExpireTime = 0
-		}
-		if added[i].DeviceLimit != 0 {
-			userLimit.DeviceLimit = added[i].DeviceLimit
-		}
-		userLimit.OverLimit = false
-		l.UserLimitInfo.Store(format.UserTag(tag, added[i].Uuid), userLimit)
-		l.UUIDtoUID[added[i].Uuid] = added[i].Id
+		l.addUserLocked(tag, added[i])
 	}
 }
 
+// StageNewUsers authorizes users that are not present in the limiter yet. It is
+// used immediately before the core publishes those users, closing the small
+// window where a freshly accepted connection could otherwise be rejected.
+// Existing users are left untouched so dynamic limits survive a failed update.
+func (l *Limiter) StageNewUsers(tag string, users []panel.UserInfo) []panel.UserInfo {
+	l.userStateMu.Lock()
+	defer l.userStateMu.Unlock()
+
+	staged := make([]panel.UserInfo, 0, len(users))
+	for i := range users {
+		if _, exists := l.UUIDtoUID[users[i].Uuid]; exists {
+			continue
+		}
+		l.addUserLocked(tag, users[i])
+		staged = append(staged, users[i])
+	}
+	return staged
+}
+
+// RollbackStagedUsers removes only entries that still match the staged user.
+// This avoids deleting a newer panel update if one was committed concurrently.
+func (l *Limiter) RollbackStagedUsers(tag string, staged []panel.UserInfo) {
+	l.userStateMu.Lock()
+	defer l.userStateMu.Unlock()
+	for i := range staged {
+		uid, exists := l.UUIDtoUID[staged[i].Uuid]
+		if !exists || uid != staged[i].Id {
+			continue
+		}
+		l.removeUserLocked(tag, staged[i])
+	}
+}
+
+func newUserLimitInfo(user panel.UserInfo) *UserLimitInfo {
+	return &UserLimitInfo{
+		UID:         user.Id,
+		SpeedLimit:  user.SpeedLimit,
+		DeviceLimit: user.DeviceLimit,
+	}
+}
+
+func (l *Limiter) addUserLocked(tag string, user panel.UserInfo) {
+	l.UserLimitInfo.Store(format.UserTag(tag, user.Uuid), newUserLimitInfo(user))
+	l.UUIDtoUID[user.Uuid] = user.Id
+}
+
+func (l *Limiter) removeUserLocked(tag string, user panel.UserInfo) {
+	taguuid := format.UserTag(tag, user.Uuid)
+	if l.abuse != nil {
+		l.abuse.removeUser(taguuid)
+	}
+	if l.audit != nil {
+		l.audit.removeUser(taguuid)
+	}
+	l.UserLimitInfo.Delete(taguuid)
+	l.UserOnlineIP.Delete(taguuid)
+	l.SpeedLimiter.Delete(taguuid)
+	delete(l.UUIDtoUID, user.Uuid)
+	delete(l.AliveList, user.Id)
+}
+
+// RuleSnapshot is an immutable snapshot of the active routing rules.
+// Its contents are intentionally opaque outside this package.
+type RuleSnapshot struct {
+	domainRules   []*regexp.Regexp
+	protocolRules []string
+}
+
+func CompileRuleSnapshot(rule *panel.Rules) (RuleSnapshot, error) {
+	if rule == nil {
+		return RuleSnapshot{}, errors.New("rules cannot be nil")
+	}
+	compiled := make([]*regexp.Regexp, len(rule.Regexp))
+	for i := range rule.Regexp {
+		pattern, err := regexp.Compile(rule.Regexp[i])
+		if err != nil {
+			return RuleSnapshot{}, fmt.Errorf("invalid domain rule %d (%q): %w", i, rule.Regexp[i], err)
+		}
+		compiled[i] = pattern
+	}
+	return RuleSnapshot{
+		domainRules:   compiled,
+		protocolRules: append([]string(nil), rule.Protocol...),
+	}, nil
+}
+
+func (l *Limiter) SnapshotRules() RuleSnapshot {
+	l.ruleMu.RLock()
+	defer l.ruleMu.RUnlock()
+	return RuleSnapshot{
+		domainRules:   append([]*regexp.Regexp(nil), l.DomainRules...),
+		protocolRules: append([]string(nil), l.ProtocolRules...),
+	}
+}
+
+func (l *Limiter) RestoreRules(snapshot RuleSnapshot) {
+	l.ruleMu.Lock()
+	l.DomainRules = append([]*regexp.Regexp(nil), snapshot.domainRules...)
+	l.ProtocolRules = append([]string(nil), snapshot.protocolRules...)
+	l.ruleMu.Unlock()
+}
+
+func (l *Limiter) SetAliveList(aliveList map[int]int) {
+	snapshot := cloneIntMap(aliveList)
+	l.userStateMu.Lock()
+	l.AliveList = snapshot
+	l.userStateMu.Unlock()
+}
+
+func (l *Limiter) AliveCount(uid int) int {
+	l.userStateMu.RLock()
+	alive := l.AliveList[uid]
+	l.userStateMu.RUnlock()
+	return alive
+}
+
+func (l *Limiter) UIDForUUID(uuid string) (int, bool) {
+	l.userStateMu.RLock()
+	uid, ok := l.UUIDtoUID[uuid]
+	l.userStateMu.RUnlock()
+	return uid, ok
+}
+
+func cloneIntMap(source map[int]int) map[int]int {
+	clone := make(map[int]int, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func (l *Limiter) CheckClientConnection(taguuid string) AbuseDecision {
+	if l.abuse == nil {
+		return AbuseDecision{}
+	}
+	return l.abuse.checkClientConnection(taguuid, time.Now())
+}
+
+func (l *Limiter) CheckOutbound(taguuid, destination string) AbuseDecision {
+	if l.abuse == nil {
+		return AbuseDecision{}
+	}
+	return l.abuse.checkOutbound(taguuid, destination, time.Now())
+}
+
+func (l *Limiter) CheckAbuseBlocked(taguuid string) AbuseDecision {
+	if l.abuse == nil {
+		return AbuseDecision{}
+	}
+	return l.abuse.isBlocked(taguuid, time.Now())
+}
+
+func (l *Limiter) AbuseGuardEnabled() bool {
+	return l.abuse != nil
+}
+
 func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire time.Time) error {
-	if v, ok := l.UserLimitInfo.Load(format.UserTag(tag, uuid)); ok {
+	taguuid := format.UserTag(tag, uuid)
+	if v, ok := l.UserLimitInfo.Load(taguuid); ok {
 		info := v.(*UserLimitInfo)
+		info.mu.Lock()
 		info.DynamicSpeedLimit = limit
 		info.ExpireTime = expire.Unix()
+		info.mu.Unlock()
+		l.SpeedLimiter.Delete(taguuid)
 	} else {
 		return errors.New("not found")
 	}
@@ -134,19 +282,16 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 	var uid int
 	if v, ok := l.UserLimitInfo.Load(taguuid); ok {
 		u := v.(*UserLimitInfo)
+		u.mu.Lock()
 		deviceLimit = u.DeviceLimit
 		uid = u.UID
 		if u.ExpireTime < time.Now().Unix() && u.ExpireTime != 0 {
-			if u.SpeedLimit != 0 {
-				userLimit = u.SpeedLimit
-				u.DynamicSpeedLimit = 0
-				u.ExpireTime = 0
-			} else {
-				l.UserLimitInfo.Delete(taguuid)
-			}
-		} else {
-			userLimit = determineSpeedLimit(u.SpeedLimit, u.DynamicSpeedLimit)
+			u.DynamicSpeedLimit = 0
+			u.ExpireTime = 0
+			l.SpeedLimiter.Delete(taguuid)
 		}
+		userLimit = determineSpeedLimit(u.SpeedLimit, u.DynamicSpeedLimit)
+		u.mu.Unlock()
 	} else {
 		return nil, true
 	}
@@ -154,7 +299,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 		// Store online user for device limit
 		newipMap := new(sync.Map)
 		newipMap.Store(ip, uid)
-		aliveIp := l.AliveList[uid]
+		aliveIp := l.AliveCount(uid)
 		// If any device is online
 		if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, newipMap); loaded {
 			oldipMap := v.(*sync.Map)
@@ -201,7 +346,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 
 func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
 	var onlineUser []panel.OnlineUser
-	l.OldUserOnline = new(sync.Map)
+	l.OldUserOnline.Clear()
 	l.UserOnlineIP.Range(func(key, value interface{}) bool {
 		taguuid := key.(string)
 		ipMap := value.(*sync.Map)

@@ -160,6 +160,7 @@ jobs:
           popd || exit 1
           FILE=./V2bX-$ASSET_NAME.zip
           DGST=$FILE.dgst
+          sha256sum "$FILE" > "$FILE.sha256"
           for METHOD in {"md5","sha1","sha256","sha512"}
           do
             openssl dgst -$METHOD $FILE | sed 's/([^)]*)//g' >>$DGST
