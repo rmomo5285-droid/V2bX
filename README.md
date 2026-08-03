@@ -60,6 +60,18 @@ wget -N https://raw.githubusercontent.com/wyx2685/V2bX-script/master/install.sh 
 GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
 ```
 
+## 安全加固分支说明
+
+`fix/xboard-hy2-abuse-hardening` 是发布候选分支，尚未创建正式 Release。它为
+Xray、sing-box 和原生 Hysteria2 增加目标地址安全检查、有限状态的用户滥用保护和
+限频审计日志，并让原生 Hysteria2 执行可支持的 XBoard 域名及 BitTorrent 规则。
+原生 Hysteria2 遇到无法执行的协议规则会拒绝启动对应节点，避免误报已生效。
+
+这些控制用于降低扫描和异常扇出风险，不替代防火墙、供应商出站策略或 IDS。
+普通四层代理无法记录 HTTPS 加密后的完整 URL。部署、迁移和回滚操作见配套
+`rmomo5285-droid/V2bX-script` 仓库的 `docs/OPERATIONS.md`；在 Release 资产和
+校验文件独立验收前，不应部署到生产节点。
+
 ## 配置文件及详细使用教程
 
 [详细使用教程](https://v2bx.v-50.me/)

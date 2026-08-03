@@ -158,9 +158,14 @@ jobs:
           touch -mt $(date +%Y01010000) *
           zip -9vr ../V2bX-$ASSET_NAME.zip .
           popd || exit 1
-          FILE=./V2bX-$ASSET_NAME.zip
+          FILE="V2bX-$ASSET_NAME.zip"
           DGST=$FILE.dgst
           sha256sum "$FILE" > "$FILE.sha256"
+          CHECKSUM_NAME=$(awk 'NR == 1 { print $2 }' "$FILE.sha256")
+          [[ "$CHECKSUM_NAME" == "$FILE" ]] || {
+            echo "Checksum sidecar must contain the release asset basename"
+            exit 1
+          }
           for METHOD in {"md5","sha1","sha256","sha512"}
           do
             openssl dgst -$METHOD $FILE | sed 's/([^)]*)//g' >>$DGST
