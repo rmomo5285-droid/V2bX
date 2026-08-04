@@ -214,4 +214,5 @@ jobs:
             echo "Expected 69 archive/checksum/digest assets, found ${#assets[@]}"
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber \
+            --repo "$GITHUB_REPOSITORY"
