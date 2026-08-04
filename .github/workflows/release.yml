@@ -21,6 +21,9 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
 
   build:
@@ -174,16 +177,41 @@ jobs:
         run: |
           mv build_assets V2bX-$ASSET_NAME
       - name: Upload files to Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: V2bX-${{ steps.get_filename.outputs.ASSET_NAME }}
           path: |
             ./V2bX-${{ steps.get_filename.outputs.ASSET_NAME }}/*
-      - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@v2
-        if: github.event_name == 'release'
+      - name: Upload release bundle artifact
+        uses: actions/upload-artifact@v7
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./V2bX-${{ steps.get_filename.outputs.ASSET_NAME }}.zip*
-          tag: ${{ github.ref }}
-          file_glob: true
+          name: release-bundle-${{ steps.get_filename.outputs.ASSET_NAME }}
+          path: ./V2bX-${{ steps.get_filename.outputs.ASSET_NAME }}.zip*
+          if-no-files-found: error
+          retention-days: 7
+
+  release-upload:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-bundle-*
+          path: release-assets
+          merge-multiple: true
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          assets=(release-assets/*.zip*)
+          if (( ${#assets[@]} != 69 )); then
+            echo "Expected 69 archive/checksum/digest assets, found ${#assets[@]}"
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
