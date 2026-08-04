@@ -2,6 +2,11 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build and upload
+        required: false
+        type: string
   push:
     branches:
       - master
@@ -102,6 +107,8 @@ jobs:
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Show workflow information
         id: get_filename
         run: |
@@ -118,11 +125,16 @@ jobs:
         run: |
           go mod download
       - name: Get release version
-        if: ${{ github.event_name == 'release' }}
+        if: ${{ github.event_name == 'release' || inputs.release_tag != '' }}
         run: |
-          echo "version=$(echo $GITHUB_REF | cut -d / -f 3)" >> $GITHUB_ENV
+          tag="${{ inputs.release_tag || github.event.release.tag_name }}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $tag"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_ENV"
       - name: Get other version
-        if: ${{ github.event_name != 'release' }}
+        if: ${{ github.event_name != 'release' && inputs.release_tag == '' }}
         run: |
           echo "version=${{ github.sha }}" >> $GITHUB_ENV
       - name: Build V2bX
@@ -191,7 +203,7 @@ jobs:
           retention-days: 7
 
   release-upload:
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || inputs.release_tag != ''
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -206,6 +218,7 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
         shell: bash
         run: |
           shopt -s nullglob
@@ -214,5 +227,6 @@ jobs:
             echo "Expected 69 archive/checksum/digest assets, found ${#assets[@]}"
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber \
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber \
             --repo "$GITHUB_REPOSITORY"
