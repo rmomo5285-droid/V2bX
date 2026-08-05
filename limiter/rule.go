@@ -3,9 +3,34 @@ package limiter
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/InazumaV/V2bX/api/panel"
 )
+
+const (
+	RouteReasonPanelDomain   = "panel_domain"
+	RouteReasonPanelProtocol = "panel_protocol"
+	RouteReasonSafety        = "safety"
+)
+
+// CheckRoute is the shared routing-policy entry point used by every core.
+// Keeping safety and panel rules here prevents protocol implementations from
+// drifting as their native routing APIs evolve independently.
+func (l *Limiter) CheckRoute(network, destination, protocol string) (reason string, reject bool) {
+	if safetyReason, unsafe := CheckSafetyDestination(network, destination); unsafe {
+		return RouteReasonSafety + ":" + safetyReason, true
+	}
+	host, _ := splitDestination(destination)
+	if l.CheckDomainRule(host) {
+		return RouteReasonPanelDomain, true
+	}
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	if protocol != "" && l.CheckProtocolRule(protocol) {
+		return RouteReasonPanelProtocol + ":" + protocol, true
+	}
+	return "", false
+}
 
 func (l *Limiter) CheckDomainRule(destination string) (reject bool) {
 	l.ruleMu.RLock()

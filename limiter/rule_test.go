@@ -38,3 +38,34 @@ func TestUpdateRuleNil(t *testing.T) {
 		t.Fatal("nil rules were accepted")
 	}
 }
+
+func TestCheckRouteUsesSameSafetyDomainAndProtocolOrder(t *testing.T) {
+	l := &Limiter{}
+	if err := l.UpdateRule(&panel.Rules{
+		Regexp:   []string{`(?i)(?:^|\.)blocked\.example\.?$`},
+		Protocol: []string{"bittorrent"},
+	}); err != nil {
+		t.Fatalf("update rules: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		network     string
+		destination string
+		protocol    string
+		wantReason  string
+	}{
+		{name: "safety first", network: "tcp", destination: "127.0.0.1:25", wantReason: "safety:private_or_special_ip"},
+		{name: "panel domain", network: "tcp", destination: "API.BLOCKED.EXAMPLE:443", wantReason: RouteReasonPanelDomain},
+		{name: "panel protocol normalized", network: "tcp", destination: "example.net:443", protocol: "BitTorrent", wantReason: "panel_protocol:bittorrent"},
+		{name: "allowed", network: "tcp", destination: "www.bilibili.com:443"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reason, rejected := l.CheckRoute(test.network, test.destination, test.protocol)
+			if rejected != (test.wantReason != "") || reason != test.wantReason {
+				t.Fatalf("CheckRoute() = %q, %v; want %q, %v", reason, rejected, test.wantReason, test.wantReason != "")
+			}
+		})
+	}
+}

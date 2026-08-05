@@ -62,10 +62,17 @@ GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX -tags "sing xray hysteria2 
 
 ## 安全加固分支说明
 
-`fix/xboard-hy2-abuse-hardening` 是发布候选分支，尚未创建正式 Release。它为
-Xray、sing-box 和原生 Hysteria2 增加目标地址安全检查、有限状态的用户滥用保护和
-限频审计日志，并让原生 Hysteria2 执行可支持的 XBoard 域名及 BitTorrent 规则。
-原生 Hysteria2 遇到无法执行的协议规则会拒绝启动对应节点，避免误报已生效。
+`fix/xboard-hy2-abuse-hardening` 为 Xray、sing-box 和原生 Hysteria2 增加统一的
+出站规则判定、有限状态的用户滥用保护和限频审计日志。V2bX 只从 XBoard 拉取一次
+`block` 路由，并在三种核心出站前执行同一个公共判定器；普通域名按域名及其子域名
+匹配，`regexp:` 保留为显式正则，`protocol:bittorrent` 由支持的协议嗅探执行。
+原生 Hysteria2 遇到无法可靠等价执行的其他协议规则会拒绝启动对应节点，避免误报
+规则已经生效。
+
+公共安全规则始终先于面板规则执行，包括私网/特殊用途地址、TCP 25 和常见 UDP
+反射放大端口。不要再在原生 Hy2 的 `hy2config.yaml` 中保留独立的
+`reject(geosite:cn)` / `reject(geoip:cn)`；这类核心专属 ACL 会造成 Xray、sing-box
+和 Hy2 行为不一致。需要阻断的目标域名应统一放在 XBoard 的 `block` 路由中。
 
 这些控制用于降低扫描和异常扇出风险，不替代防火墙、供应商出站策略或 IDS。
 普通四层代理无法记录 HTTPS 加密后的完整 URL。部署、迁移和回滚操作见配套

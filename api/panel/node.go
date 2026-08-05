@@ -219,6 +219,9 @@ func appendBlockRules(rules *Rules, matches []string) error {
 			if protocol == "" {
 				return fmt.Errorf("empty protocol rule")
 			}
+			if protocol != "bittorrent" {
+				return fmt.Errorf("unsupported protocol rule %q; all cores currently support only bittorrent", protocol)
+			}
 			if _, exists := protocols[protocol]; !exists {
 				rules.Protocol = append(rules.Protocol, protocol)
 				protocols[protocol] = struct{}{}

@@ -58,6 +58,13 @@ func TestRouteMatchesRejectsNonStringValues(t *testing.T) {
 	}
 }
 
+func TestAppendBlockRulesRejectsProtocolNotSupportedByEveryCore(t *testing.T) {
+	var rules Rules
+	if err := appendBlockRules(&rules, []string{"protocol:http"}); err == nil {
+		t.Fatal("protocol rule unsupported by native Hysteria2 was accepted")
+	}
+}
+
 func assertAnyMatch(t *testing.T, rules []*regexp.Regexp, value string, want bool) {
 	t.Helper()
 	got := false

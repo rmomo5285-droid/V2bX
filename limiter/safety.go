@@ -41,8 +41,14 @@ var safeDestinationExceptions = []netip.Prefix{
 	netip.MustParsePrefix("192.0.0.10/32"),
 }
 
+var unsafeUDPPorts = map[string]struct{}{
+	"17": {}, "19": {}, "123": {}, "137": {}, "138": {}, "139": {},
+	"161": {}, "389": {}, "1900": {}, "3702": {}, "5353": {}, "11211": {},
+}
+
 // CheckSafetyDestination rejects targets that a public proxy node should not
-// reach: local/special-use addresses and direct SMTP delivery on TCP port 25.
+// reach: local/special-use addresses, direct SMTP delivery on TCP port 25,
+// and UDP services commonly abused for reflection/amplification.
 func CheckSafetyDestination(network, destination string) (string, bool) {
 	host, port := splitDestination(destination)
 	if isUnsafeDestinationHost(host) {
@@ -50,6 +56,11 @@ func CheckSafetyDestination(network, destination string) (string, bool) {
 	}
 	if strings.EqualFold(network, "tcp") && port == "25" {
 		return "outbound_tcp_port_25", true
+	}
+	if strings.EqualFold(network, "udp") {
+		if _, blocked := unsafeUDPPorts[port]; blocked {
+			return "udp_amplification_port_" + port, true
+		}
 	}
 	return "", false
 }

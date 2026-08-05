@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,35 +142,33 @@ func (h *policyRequestHook) runTCPDelegate(stream server.HyStream, reqAddr *stri
 
 func (h *policyRequestHook) enforcePanelRules(limit *limiter.Limiter, user, network, reqAddr string, firstPayload []byte) error {
 	target := destinationHost(reqAddr)
-	if limit.CheckDomainRule(target) {
-		if user != "" {
-			taguuid := format.UserTag(h.tag, user)
-			if shouldLog, suppressed := limit.ShouldLogRejection(taguuid, "panel_domain"); shouldLog {
-				h.logger.Warn("panel rule rejected request",
-					zap.String("tag", h.tag),
-					zap.String("uuid", user),
-					zap.String("network", network),
-					zap.String("target", target),
-					zap.Int("suppressed", suppressed))
-			}
+	protocol := ""
+	if looksLikeBitTorrent(network, firstPayload) {
+		protocol = "bittorrent"
+	}
+	reason, reject := limit.CheckRoute(network, reqAddr, protocol)
+	if !reject {
+		return nil
+	}
+	if user != "" {
+		taguuid := format.UserTag(h.tag, user)
+		if shouldLog, suppressed := limit.ShouldLogRejection(taguuid, reason); shouldLog {
+			h.logger.Warn("routing policy rejected request",
+				zap.String("tag", h.tag),
+				zap.String("uuid", user),
+				zap.String("network", network),
+				zap.String("target", target),
+				zap.String("reason", reason),
+				zap.Int("suppressed", suppressed))
 		}
+	}
+	if strings.HasPrefix(reason, limiter.RouteReasonSafety+":") {
+		return fmt.Errorf("%w: %s", errSafetyRuleRejected, reason)
+	}
+	if reason == limiter.RouteReasonPanelDomain {
 		return fmt.Errorf("%w: %s", errPanelRuleRejected, target)
 	}
-	if limit.HasProtocolRule("bittorrent") && looksLikeBitTorrent(network, firstPayload) {
-		if user != "" {
-			taguuid := format.UserTag(h.tag, user)
-			if shouldLog, suppressed := limit.ShouldLogRejection(taguuid, "panel_protocol:bittorrent"); shouldLog {
-				h.logger.Warn("panel protocol rule rejected request",
-					zap.String("tag", h.tag),
-					zap.String("uuid", user),
-					zap.String("network", network),
-					zap.String("protocol", "bittorrent"),
-					zap.Int("suppressed", suppressed))
-			}
-		}
-		return fmt.Errorf("%w: protocol bittorrent", errPanelRuleRejected)
-	}
-	return nil
+	return fmt.Errorf("%w: %s", errPanelRuleRejected, reason)
 }
 
 func readTCPPrefix(stream server.HyStream, size int, timeout time.Duration) ([]byte, error) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/InazumaV/V2bX/limiter"
 	"github.com/apernet/hysteria/core/v2/server"
@@ -55,14 +56,15 @@ func (o *panelRuleOutbound) check(network, reqAddr string) error {
 	if err != nil {
 		return fmt.Errorf("get limiter for %s: %w", o.tag, err)
 	}
+	reason, reject := l.CheckRoute(network, reqAddr, "")
+	if !reject {
+		return nil
+	}
 	destination := destinationHost(reqAddr)
-	if reason, reject := limiter.CheckSafetyDestination(network, reqAddr); reject {
-		return fmt.Errorf("%w: %s target %s", errSafetyRuleRejected, reason, destination)
+	if strings.HasPrefix(reason, limiter.RouteReasonSafety+":") {
+		return fmt.Errorf("%w: %s target %s", errSafetyRuleRejected, strings.TrimPrefix(reason, limiter.RouteReasonSafety+":"), destination)
 	}
-	if l.CheckDomainRule(destination) {
-		return fmt.Errorf("%w: %s", errPanelRuleRejected, destination)
-	}
-	return nil
+	return fmt.Errorf("%w: %s reason=%s", errPanelRuleRejected, destination, reason)
 }
 
 type panelRuleUDPConn struct {

@@ -48,13 +48,12 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 		conn = rate.NewConnRateLimiter(conn, b)
 	}
 	if l != nil {
-		destStr := m.Destination.AddrString()
 		destination := m.Destination.String()
 		protocol := m.Protocol
-		if reason, reject := limiter.CheckSafetyDestination("tcp", destination); reject {
-			if shouldLog, suppressed := l.ShouldLogRejection(taguuid, "safety:"+reason); shouldLog {
+		if reason, reject := l.CheckRoute("tcp", destination, protocol); reject {
+			if shouldLog, suppressed := l.ShouldLogRejection(taguuid, reason); shouldLog {
 				log.Error(fmt.Sprintf(
-					"Node safety rule rejected user %s target %s: reason=%s suppressed=%d",
+					"Routing policy rejected user %s target %s: reason=%s suppressed=%d",
 					m.User,
 					destination,
 					reason,
@@ -62,30 +61,6 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 			}
 			conn.Close()
 			return conn
-		}
-		if l.CheckDomainRule(destStr) {
-			if shouldLog, suppressed := l.ShouldLogRejection(taguuid, "panel_domain"); shouldLog {
-				log.Error(fmt.Sprintf(
-					"Panel rule rejected user %s target %s: reason=panel_domain suppressed=%d",
-					m.User,
-					destStr,
-					suppressed))
-			}
-			conn.Close()
-			return conn
-		}
-		if len(protocol) != 0 {
-			if l.CheckProtocolRule(protocol) {
-				if shouldLog, suppressed := l.ShouldLogRejection(taguuid, "panel_protocol:"+protocol); shouldLog {
-					log.Error(fmt.Sprintf(
-						"Panel protocol rule rejected user %s target %s: reason=panel_protocol suppressed=%d",
-						m.User,
-						protocol,
-						suppressed))
-				}
-				conn.Close()
-				return conn
-			}
 		}
 		if decision := l.CheckOutbound(taguuid, m.Destination.String()); decision.Reject {
 			if shouldLog, suppressed := l.ShouldLogRejection(taguuid, "abuse:"+decision.Reason); shouldLog {
@@ -133,13 +108,12 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 		//conn = rate.NewPacketConnCounter(conn, b)
 	}
 	if l != nil {
-		destStr := m.Destination.AddrString()
 		destination := m.Destination.String()
 		protocol := m.Protocol
-		if reason, reject := limiter.CheckSafetyDestination("udp", destination); reject {
-			if shouldLog, suppressed := l.ShouldLogRejection(taguuid, "safety:"+reason); shouldLog {
+		if reason, reject := l.CheckRoute("udp", destination, protocol); reject {
+			if shouldLog, suppressed := l.ShouldLogRejection(taguuid, reason); shouldLog {
 				log.Error(fmt.Sprintf(
-					"Node safety rule rejected user %s target %s: reason=%s suppressed=%d",
+					"Routing policy rejected user %s target %s: reason=%s suppressed=%d",
 					m.User,
 					destination,
 					reason,
@@ -147,30 +121,6 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 			}
 			conn.Close()
 			return conn
-		}
-		if l.CheckDomainRule(destStr) {
-			if shouldLog, suppressed := l.ShouldLogRejection(taguuid, "panel_domain"); shouldLog {
-				log.Error(fmt.Sprintf(
-					"Panel rule rejected user %s target %s: reason=panel_domain suppressed=%d",
-					m.User,
-					destStr,
-					suppressed))
-			}
-			conn.Close()
-			return conn
-		}
-		if len(protocol) != 0 {
-			if l.CheckProtocolRule(protocol) {
-				if shouldLog, suppressed := l.ShouldLogRejection(taguuid, "panel_protocol:"+protocol); shouldLog {
-					log.Error(fmt.Sprintf(
-						"Panel protocol rule rejected user %s target %s: reason=panel_protocol suppressed=%d",
-						m.User,
-						protocol,
-						suppressed))
-				}
-				conn.Close()
-				return conn
-			}
 		}
 		if decision := l.CheckOutbound(taguuid, m.Destination.String()); decision.Reject {
 			if shouldLog, suppressed := l.ShouldLogRejection(taguuid, "abuse:"+decision.Reason); shouldLog {

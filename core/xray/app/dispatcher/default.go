@@ -551,10 +551,10 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			if strings.Contains(destStr, ":") {
 				destinationKey = fmt.Sprintf("[%s]:%d", destStr, destination.Port)
 			}
-			if reason, reject := limiter.CheckSafetyDestination(destination.Network.String(), destinationKey); reject {
-				if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, "safety:"+reason); shouldLog {
+			if reason, reject := l.CheckRoute(destination.Network.String(), destinationKey, protocol); reject {
+				if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, reason); shouldLog {
 					errors.LogError(ctx, fmt.Sprintf(
-						"Node safety rule rejected user %s target %s: reason=%s suppressed=%d",
+						"Routing policy rejected user %s target %s: reason=%s suppressed=%d",
 						sessionInbound.User.Email,
 						destinationKey,
 						reason,
@@ -563,32 +563,6 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 				common.Close(link.Writer)
 				common.Interrupt(link.Reader)
 				return
-			}
-			if l.CheckDomainRule(destStr) {
-				if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, "panel_domain"); shouldLog {
-					errors.LogError(ctx, fmt.Sprintf(
-						"Panel rule rejected user %s target %s: reason=panel_domain suppressed=%d",
-						sessionInbound.User.Email,
-						destStr,
-						suppressed))
-				}
-				common.Close(link.Writer)
-				common.Interrupt(link.Reader)
-				return
-			}
-			if len(protocol) != 0 {
-				if l.CheckProtocolRule(protocol) {
-					if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, "panel_protocol:"+protocol); shouldLog {
-						errors.LogError(ctx, fmt.Sprintf(
-							"Panel protocol rule rejected user %s target %s: reason=panel_protocol suppressed=%d",
-							sessionInbound.User.Email,
-							protocol,
-							suppressed))
-					}
-					common.Close(link.Writer)
-					common.Interrupt(link.Reader)
-					return
-				}
 			}
 			if decision := l.CheckOutbound(sessionInbound.User.Email, destinationKey); decision.Reject {
 				if shouldLog, suppressed := l.ShouldLogRejection(sessionInbound.User.Email, "abuse:"+decision.Reason); shouldLog {
