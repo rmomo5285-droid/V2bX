@@ -7,7 +7,7 @@ A V2Board/XBoard node server based on multiple cores, modified from XrayR.
 一个基于多种内核的 V2Board/XBoard 节点服务端，修改自 XrayR，支持 V2Ray、
 Trojan、Shadowsocks 和 Hysteria 等协议。
 
-当前生产组合为核心 [`v0.1.1`](https://github.com/rmomo5285-droid/V2bX/releases/tag/v0.1.1)
+当前生产组合为核心 [`v0.1.2`](https://github.com/rmomo5285-droid/V2bX/releases/tag/v0.1.2)
 与部署脚本 [`v0.1.3`](https://github.com/rmomo5285-droid/V2bX-script/releases/tag/v0.1.3)。
 正式节点应使用固定版本的 Release；默认分支用于同步上游和后续开发，不应替代
 生产版本锁定。

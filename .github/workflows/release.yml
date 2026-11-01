@@ -8,6 +8,8 @@ on:
         required: false
         type: string
   push:
+    tags:
+      - 'v*'
     branches:
       - master
       - dev_new
@@ -31,7 +33,11 @@ permissions:
 
 jobs:
 
+  validation:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: validation
     strategy:
       matrix:
         # Include amd64 on all platforms.
@@ -104,6 +110,7 @@ jobs:
       GOARCH: ${{ matrix.goarch }}
       GOARM: ${{ matrix.goarm }}
       CGO_ENABLED: 0
+      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name || github.ref_name }}
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v7
@@ -125,16 +132,16 @@ jobs:
         run: |
           go mod download
       - name: Get release version
-        if: ${{ github.event_name == 'release' || inputs.release_tag != '' }}
+        if: ${{ github.event_name == 'release' || inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/') }}
         run: |
-          tag="${{ inputs.release_tag || github.event.release.tag_name }}"
+          tag="$RELEASE_TAG"
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release tag: $tag"
             exit 1
           fi
           echo "version=$tag" >> "$GITHUB_ENV"
       - name: Get other version
-        if: ${{ github.event_name != 'release' && inputs.release_tag == '' }}
+        if: ${{ github.event_name != 'release' && inputs.release_tag == '' && !startsWith(github.ref, 'refs/tags/') }}
         run: |
           echo "version=${{ github.sha }}" >> $GITHUB_ENV
       - name: Build V2bX
@@ -205,12 +212,15 @@ jobs:
           retention-days: 7
 
   release-upload:
-    if: github.event_name == 'release' || inputs.release_tag != ''
+    if: github.event_name == 'release' || inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
       - name: Download verified release bundles
         uses: actions/download-artifact@v8
         with:
@@ -220,7 +230,8 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name || github.ref_name }}
+          CREATE_RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
         shell: bash
         run: |
           shopt -s nullglob
@@ -229,6 +240,21 @@ jobs:
             echo "Expected 69 archive/checksum/digest assets, found ${#assets[@]}"
             exit 1
           fi
+          (cd release-assets && sha256sum -c ./*.sha256)
+          if [[ "$CREATE_RELEASE" == true ]]; then
+            [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+            notes="docs/releases/$RELEASE_TAG.md"
+            test -f "$notes"
+            if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create "$RELEASE_TAG" --verify-tag --latest=false \
+                --title "V2bX $RELEASE_TAG" --notes-file "$notes" --repo "$GITHUB_REPOSITORY"
+            fi
+          fi
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber \
             --repo "$GITHUB_REPOSITORY"
+          uploaded=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')
+          [[ "$uploaded" == 69 ]]
+          if [[ "$CREATE_RELEASE" == true ]]; then
+            gh release edit "$RELEASE_TAG" --latest --repo "$GITHUB_REPOSITORY"
+          fi
