@@ -22,7 +22,7 @@ type HookServer struct {
 
 func (h *HookServer) TraceStream(stream server.HyStream, stats *server.StreamStats) {
 	if h.StreamUsers != nil {
-		h.StreamUsers.Store(stream, stats.AuthID)
+		h.StreamUsers.Store(stream, authUser(stats.AuthID))
 	}
 }
 
@@ -33,6 +33,7 @@ func (h *HookServer) UntraceStream(stream server.HyStream) {
 }
 
 func (h *HookServer) LogTraffic(id string, tx, rx uint64) (ok bool) {
+	id = authUser(id)
 	var c interface{}
 	var exists bool
 

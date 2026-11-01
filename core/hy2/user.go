@@ -58,7 +58,7 @@ func (a *nodeAuthenticator) Authenticate(addr net.Addr, auth string, tx uint64) 
 		}
 		return false, ""
 	}
-	return true, auth
+	return true, newAuthID(auth)
 }
 
 func (h *Hysteria2) AddUsers(p *vCore.AddUsersParams) (added int, err error) {

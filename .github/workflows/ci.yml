@@ -36,6 +36,10 @@ jobs:
       - name: Run full test suite
         run: go test ./...
       - name: Run focused race suite
-        run: go test -race ./limiter ./node ./core/hy2
+        run: go test -race ./common/accesslog ./limiter ./node ./core/hy2 ./core/sing ./core/xray/app/dispatcher
+      - name: Verify upgrade and rollback
+        run: |
+          bash -n scripts/upgrade-accesslog.sh
+          sudo env PATH="$PATH" bash scripts/tests/upgrade-accesslog-test.sh
       - name: Run vet
         run: go vet ./...

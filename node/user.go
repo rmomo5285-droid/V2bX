@@ -7,6 +7,7 @@ import (
 
 func (c *Controller) reportUserTrafficTask() (err error) {
 	userTraffic, _ := c.server.GetUserTrafficSlice(c.tag, true)
+	c.limiter.QualifyOnlineDevices(userTraffic)
 	if len(userTraffic) > 0 {
 		err = c.apiClient.ReportUserTraffic(userTraffic)
 		if err != nil {
@@ -20,40 +21,49 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 		}
 	}
 
-	if onlineDevice, err := c.limiter.GetOnlineDevice(); err != nil {
-		log.Print(err)
-	} else if len(*onlineDevice) > 0 {
-		// Only report user has traffic > 100kb to allow ping test
-		var result []panel.OnlineUser
-		var nocountUID = make(map[int]struct{})
-		for _, traffic := range userTraffic {
-			total := traffic.Upload + traffic.Download
-			if total < int64(c.Options.DeviceOnlineMinTraffic*1000) {
-				nocountUID[traffic.UID] = struct{}{}
-			}
-		}
-		for _, online := range *onlineDevice {
-			if _, ok := nocountUID[online.UID]; !ok {
-				result = append(result, online)
-			}
-		}
-		data := make(map[int][]string)
-		for _, onlineuser := range result {
-			// json structure: { UID1:["ip1","ip2"],UID2:["ip3","ip4"] }
-			data[onlineuser.UID] = append(data[onlineuser.UID], onlineuser.IP)
-		}
-		if err = c.apiClient.ReportNodeOnlineUsers(&data); err != nil {
-			log.WithFields(log.Fields{
-				"tag": c.tag,
-				"err": err,
-			}).Info("Report online users failed")
-		} else {
-			log.WithField("tag", c.tag).Infof("Total %d online users, %d Reported", len(*onlineDevice), len(result))
-			log.WithField("tag", c.tag).Debugf("Online users: %+v", data)
-		}
+	return nil
+}
+
+// Online heartbeats are independent of the accounting push interval.
+func (c *Controller) reportOnlineUsersTask() error {
+	c.onlineReportMu.Lock()
+	defer c.onlineReportMu.Unlock()
+	userTraffic, err := c.server.GetUserTrafficSlice(c.tag, false)
+	if err != nil {
+		log.WithError(err).Warn("Read online traffic snapshot failed")
 	}
 
-	userTraffic = nil
+	c.limiter.QualifyOnlineDevices(userTraffic)
+	// Retain the legacy window only for the existing device-limit checks.
+	// It no longer determines which live IPs are sent to Xboard.
+	_, _ = c.limiter.GetOnlineDevice()
+	data := c.limiter.ActiveDeviceSnapshot()
+
+	// Include departed UIDs explicitly, retaining the successful baseline
+	// across transient failures. HTTP alive replaces each included list.
+	for uid := range c.reportedOnline {
+		if _, ok := data[uid]; !ok {
+			data[uid] = []string{}
+		}
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	if err = c.apiClient.ReportNodeOnlineUsers(&data); err != nil {
+		log.WithFields(log.Fields{
+			"tag": c.tag,
+			"err": err,
+		}).Info("Report online users failed")
+	} else {
+		c.reportedOnline = make(map[int]struct{})
+		for uid, ips := range data {
+			if len(ips) > 0 {
+				c.reportedOnline[uid] = struct{}{}
+			}
+		}
+		log.WithField("tag", c.tag).Infof("Report %d active users", len(c.reportedOnline))
+		log.WithField("tag", c.tag).Debugf("Online users: %+v", data)
+	}
 	return nil
 }
 

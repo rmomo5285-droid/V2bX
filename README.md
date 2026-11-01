@@ -14,6 +14,9 @@ Trojan、Shadowsocks 和 Hysteria 等协议。
 
 ## 特点
 
+新增可选的三核心访问记录上报和独立在线心跳，配置、升级和 ClickHouse 对接见
+[访问分析部署说明](docs/accesslog.md)。默认关闭上报，现有节点配置可继续使用。
+
 * 永久开源且免费。
 * 支持Vmess/Vless, Trojan， Shadowsocks, Hysteria1/2多种协议。
 * 支持Vless和XTLS等新特性。

@@ -532,7 +532,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	ob := outbounds[len(outbounds)-1]
 
 	sessionInbound := session.InboundFromContext(ctx)
-	if sessionInbound.User != nil {
+	if sessionInbound != nil && sessionInbound.User != nil {
 		if l == nil {
 			var err error
 			l, err = limiter.GetLimiter(sessionInbound.Tag)
@@ -541,6 +541,13 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			}
 		}
 		if l != nil {
+			trackLink(ctx, link, l.AcquireDevice(sessionInbound.User.Email, sessionInbound.Source.Address.IP().String()))
+			network := "tcp"
+			if destination.Network == net.Network_UDP {
+				network = "udp"
+			}
+			l.RecordAccess(sessionInbound.User.Email, sessionInbound.Source.Address.IP().String(), network,
+				fmt.Sprintf("%s:%d", destination.Address.String(), destination.Port))
 			var destStr string
 			if destination.Address.Family().IsDomain() {
 				destStr = destination.Address.Domain()

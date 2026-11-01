@@ -3,9 +3,11 @@ package cmd
 import (
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
+	"github.com/InazumaV/V2bX/common/accesslog"
 	"github.com/InazumaV/V2bX/conf"
 	vCore "github.com/InazumaV/V2bX/core"
 	"github.com/InazumaV/V2bX/limiter"
@@ -62,6 +64,12 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		log.SetOutput(f)
 	}
 	limiter.Init()
+	statusPath := filepath.Join(filepath.Dir(config), "accesslog.status.json")
+	if err := accesslog.Configure(c.AccessLog, statusPath); err != nil {
+		log.WithField("err", err).Error("Invalid access log configuration")
+		return
+	}
+	defer accesslog.Shutdown()
 	log.Info("Start V2bX...")
 	vc, err := vCore.NewCore(c.CoresConfig)
 	if err != nil {
@@ -73,7 +81,7 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		log.WithField("err", err).Error("Start core failed")
 		return
 	}
-	defer vc.Close()
+	defer func() { _ = vc.Close() }()
 	log.Info("Core ", vc.Type(), " started")
 	nodes := node.New()
 	err = nodes.Start(c.NodeConfig, vc)
@@ -87,6 +95,9 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	if watch {
 		err = c.Watch(config, xdns, sdns, func() {
 			nodes.Close()
+			if err := accesslog.Configure(c.AccessLog, statusPath); err != nil {
+				log.WithField("err", err).Error("Reload access log configuration failed")
+			}
 			err = vc.Close()
 			if err != nil {
 				log.WithField("err", err).Error("Restart node failed")
@@ -124,4 +135,5 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		signal.Notify(osSignals, syscall.SIGINT, syscall.SIGTERM)
 		<-osSignals
 	}
+	nodes.Close()
 }

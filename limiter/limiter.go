@@ -23,19 +23,23 @@ func Init() {
 }
 
 type Limiter struct {
-	ruleMu        sync.RWMutex
-	userStateMu   sync.RWMutex
-	abuse         *abuseGuard
-	audit         *rejectionAudit
-	DomainRules   []*regexp.Regexp
-	ProtocolRules []string
-	SpeedLimit    int
-	UserOnlineIP  *sync.Map      // Key: TagUUID, value: {Key: Ip, value: Uid}
-	OldUserOnline *sync.Map      // Key: Ip, value: Uid
-	UUIDtoUID     map[string]int // Key: UUID, value: Uid
-	UserLimitInfo *sync.Map      // Key: TagUUID value: UserLimitInfo
-	SpeedLimiter  *sync.Map      // key: TagUUID, value: *ratelimit.Bucket
-	AliveList     map[int]int    // Key: Uid, value: alive_ip
+	NodeID           int
+	OnlineMinTraffic int64
+	onlineMu         sync.Mutex
+	devices          map[deviceKey]*deviceState
+	ruleMu           sync.RWMutex
+	userStateMu      sync.RWMutex
+	abuse            *abuseGuard
+	audit            *rejectionAudit
+	DomainRules      []*regexp.Regexp
+	ProtocolRules    []string
+	SpeedLimit       int
+	UserOnlineIP     *sync.Map      // Key: TagUUID, value: {Key: Ip, value: Uid}
+	OldUserOnline    *sync.Map      // Key: Ip, value: Uid
+	UUIDtoUID        map[string]int // Key: UUID, value: Uid
+	UserLimitInfo    *sync.Map      // Key: TagUUID value: UserLimitInfo
+	SpeedLimiter     *sync.Map      // key: TagUUID, value: *ratelimit.Bucket
+	AliveList        map[int]int    // Key: Uid, value: alive_ip
 }
 
 type UserLimitInfo struct {
@@ -156,6 +160,13 @@ func (l *Limiter) removeUserLocked(tag string, user panel.UserInfo) {
 	}
 	l.UserLimitInfo.Delete(taguuid)
 	l.UserOnlineIP.Delete(taguuid)
+	l.onlineMu.Lock()
+	for key := range l.devices {
+		if key.user == taguuid {
+			delete(l.devices, key)
+		}
+	}
+	l.onlineMu.Unlock()
 	l.SpeedLimiter.Delete(taguuid)
 	delete(l.UUIDtoUID, user.Uuid)
 	delete(l.AliveList, user.Id)
@@ -300,6 +311,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 		newipMap := new(sync.Map)
 		newipMap.Store(ip, uid)
 		aliveIp := l.AliveCount(uid)
+		knownDevice := l.hasActiveDevice(taguuid, ip)
 		// If any device is online
 		if v, loaded := l.UserOnlineIP.LoadOrStore(taguuid, newipMap); loaded {
 			oldipMap := v.(*sync.Map)
@@ -309,7 +321,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 					if v.(int) == uid {
 						l.OldUserOnline.Delete(ip)
 					}
-				} else if deviceLimit > 0 {
+				} else if deviceLimit > 0 && !knownDevice {
 					if deviceLimit <= aliveIp {
 						oldipMap.Delete(ip)
 						return nil, true
@@ -321,7 +333,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 				l.OldUserOnline.Delete(ip)
 			}
 		} else {
-			if deviceLimit > 0 {
+			if deviceLimit > 0 && !knownDevice {
 				if deviceLimit <= aliveIp {
 					l.UserOnlineIP.Delete(taguuid)
 					return nil, true

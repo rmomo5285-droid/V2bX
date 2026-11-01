@@ -1,0 +1,13 @@
+{
+  "Enabled": false,
+  "Backend": "ingest",
+  "Endpoint": "https://logs.example.com/ingest",
+  "Username": "v2bx_writer",
+  "PasswordFile": "accesslog.password",
+  "QueueCapacity": 256,
+  "QueueMaxBytes": 262144,
+  "BatchSize": 64,
+  "BatchMaxBytes": 65536,
+  "FlushInterval": "5s",
+  "RequestTimeout": "10s"
+}

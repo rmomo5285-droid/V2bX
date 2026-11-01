@@ -3,6 +3,7 @@ package node
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/task"
@@ -13,6 +14,7 @@ import (
 )
 
 type Controller struct {
+	onlineReportMu            sync.Mutex
 	server                    vCore.Core
 	apiClient                 *panel.Client
 	tag                       string
@@ -20,6 +22,7 @@ type Controller struct {
 	traffic                   map[string]int64
 	userList                  []panel.UserInfo
 	aliveMap                  map[int]int
+	reportedOnline            map[int]struct{}
 	info                      *panel.NodeInfo
 	nodeInfoMonitorPeriodic   *task.Task
 	userReportPeriodic        *task.Task
@@ -67,6 +70,8 @@ func (c *Controller) Start() error {
 
 	// add limiter
 	l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, c.aliveMap)
+	l.NodeID = node.Id
+	l.OnlineMinTraffic = c.Options.DeviceOnlineMinTraffic * 1000
 	// add rule limiter
 	if err = l.UpdateRule(&node.Rules); err != nil {
 		return fmt.Errorf("update rule error: %s", err)

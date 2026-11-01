@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/InazumaV/V2bX/common/format"
 	"github.com/InazumaV/V2bX/limiter"
@@ -13,8 +14,10 @@ import (
 )
 
 type serverLogger struct {
-	Tag    string
-	logger *zap.Logger
+	devicesMu sync.Mutex
+	devices   map[string]hyDevice
+	Tag       string
+	logger    *zap.Logger
 }
 
 var logLevelMap = map[string]zapcore.Level{
@@ -48,6 +51,8 @@ var logFormatMap = map[string]zapcore.EncoderConfig{
 }
 
 func (l *serverLogger) Connect(addr net.Addr, uuid string, tx uint64) {
+	authID := uuid
+	uuid = authUser(uuid)
 	limiterinfo, err := limiter.GetLimiter(l.Tag)
 	if err != nil {
 		l.logger.Panic("Get limiter error", zap.String("tag", l.Tag), zap.Error(err))
@@ -58,19 +63,32 @@ func (l *serverLogger) Connect(addr net.Addr, uuid string, tx uint64) {
 		}
 		l.logRejection(limiterinfo, uuid, "connection_or_device_limit", "connection or device limit rejected client",
 			zap.String("addr", addr.String()))
+	} else {
+		l.trackDevice(authID, uuid, addr, limiterinfo, true)
 	}
 	l.logger.Info("client connected", zap.String("addr", addr.String()), zap.String("uuid", uuid), zap.Uint64("tx", tx))
 }
 
 func (l *serverLogger) Disconnect(addr net.Addr, uuid string, err error) {
+	authID := uuid
+	uuid = authUser(uuid)
+	l.devicesMu.Lock()
+	if device, ok := l.devices[authID]; ok {
+		device.lease.Close()
+		delete(l.devices, authID)
+	}
+	l.devicesMu.Unlock()
 	l.logger.Info("client disconnected", zap.String("addr", addr.String()), zap.String("uuid", uuid), zap.Error(err))
 }
 
 func (l *serverLogger) TCPRequest(addr net.Addr, uuid, reqAddr string) {
+	authID := uuid
+	uuid = authUser(uuid)
 	limiterinfo, err := limiter.GetLimiter(l.Tag)
 	if err != nil {
 		l.logger.Panic("Get limiter error", zap.String("tag", l.Tag), zap.Error(err))
 	}
+	l.trackDevice(authID, uuid, addr, limiterinfo, false)
 	if _, r := limiterinfo.CheckLimit(format.UserTag(l.Tag, uuid), extractIPFromAddr(addr), addr.Network() == "tcp", true); r {
 		if userLimit, ok := limiterinfo.UserLimitInfo.Load(format.UserTag(l.Tag, uuid)); ok {
 			userLimit.(*limiter.UserLimitInfo).OverLimit.Store(true)
@@ -79,9 +97,11 @@ func (l *serverLogger) TCPRequest(addr net.Addr, uuid, reqAddr string) {
 			zap.String("addr", addr.String()), zap.String("target", reqAddr))
 	}
 	l.logger.Debug("TCP request", zap.String("addr", addr.String()), zap.String("uuid", uuid), zap.String("reqAddr", reqAddr))
+	limiterinfo.RecordAccess(format.UserTag(l.Tag, uuid), extractIPFromAddr(addr), "tcp", reqAddr)
 }
 
 func (l *serverLogger) TCPError(addr net.Addr, uuid, reqAddr string, err error) {
+	uuid = authUser(uuid)
 	if reason := policyRejectionReason(err); reason != "" {
 		if limiterinfo, getErr := limiter.GetLimiter(l.Tag); getErr == nil {
 			l.logRejection(limiterinfo, uuid, reason, "policy rejected TCP request",
@@ -97,10 +117,13 @@ func (l *serverLogger) TCPError(addr net.Addr, uuid, reqAddr string, err error) 
 }
 
 func (l *serverLogger) UDPRequest(addr net.Addr, uuid string, sessionId uint32, reqAddr string) {
+	authID := uuid
+	uuid = authUser(uuid)
 	limiterinfo, err := limiter.GetLimiter(l.Tag)
 	if err != nil {
 		l.logger.Panic("Get limiter error", zap.String("tag", l.Tag), zap.Error(err))
 	}
+	l.trackDevice(authID, uuid, addr, limiterinfo, false)
 	taguuid := format.UserTag(l.Tag, uuid)
 	if _, r := limiterinfo.CheckLimit(taguuid, extractIPFromAddr(addr), addr.Network() == "tcp", true); r {
 		if userLimit, ok := limiterinfo.UserLimitInfo.Load(format.UserTag(l.Tag, uuid)); ok {
@@ -120,9 +143,11 @@ func (l *serverLogger) UDPRequest(addr net.Addr, uuid string, sessionId uint32, 
 			zap.Time("blocked_until", decision.BlockedUntil))
 	}
 	l.logger.Debug("UDP request", zap.String("addr", addr.String()), zap.String("uuid", uuid), zap.Uint32("sessionId", sessionId), zap.String("reqAddr", reqAddr))
+	limiterinfo.RecordAccess(taguuid, extractIPFromAddr(addr), "udp", reqAddr)
 }
 
 func (l *serverLogger) UDPError(addr net.Addr, uuid string, sessionId uint32, err error) {
+	uuid = authUser(uuid)
 	if reason := policyRejectionReason(err); reason != "" {
 		if limiterinfo, getErr := limiter.GetLimiter(l.Tag); getErr == nil {
 			l.logRejection(limiterinfo, uuid, reason, "policy rejected UDP request",

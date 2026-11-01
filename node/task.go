@@ -29,6 +29,8 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 	_ = c.nodeInfoMonitorPeriodic.Start(false)
 	log.WithField("tag", c.tag).Info("Start report node status")
 	_ = c.userReportPeriodic.Start(false)
+	c.onlineIpReportPeriodic = &task.Task{Interval: 60 * time.Second, Execute: c.reportOnlineUsersTask}
+	_ = c.onlineIpReportPeriodic.Start(false)
 	c.syncRenewCertTask(node)
 	if c.renewCertPeriodic != nil {
 		log.WithField("tag", c.tag).Info("Start renew cert")
