@@ -41,6 +41,21 @@ jobs:
         run: go test github.com/sagernet/quic-go/http3
       - name: Run focused race suite
         run: go test -race ./api/panel ./common/counter ./common/task ./common/accesslog ./conf ./core ./limiter ./node ./core/hy2 ./core/sing ./core/xray/app/dispatcher
+      - name: Run bounded localhost proxy stress
+        env:
+          V2BX_STRESS: '1'
+          V2BX_STRESS_SECONDS: '8'
+          V2BX_STRESS_CONCURRENCY: '32'
+          V2BX_STRESS_CHURN_RPS: '1000'
+          V2BX_STRESS_IDLE_SECONDS: '5'
+          V2BX_STRESS_REPORT: ${{ github.workspace }}/proxy-stress.json
+        run: go test -count=1 -timeout 3m -run '^TestProxyStress$' -v ./limiter
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-proxy-stress
+          path: proxy-stress.json
+          if-no-files-found: warn
       - name: Verify upgrade and rollback
         run: |
           bash -n scripts/upgrade-accesslog.sh
