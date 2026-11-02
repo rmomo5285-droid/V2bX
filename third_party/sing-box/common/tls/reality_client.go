@@ -206,7 +206,6 @@ func (e *RealityClientConfig) ClientHandshake(ctx context.Context, conn net.Conn
 	copy(hello.Raw[39:], hello.SessionId)
 	if debug.Enabled {
 		fmt.Printf("REALITY hello.sessionId: %v\n", hello.SessionId)
-		fmt.Printf("REALITY uConn.AuthKey: %v\n", authKey)
 	}
 
 	err = uConn.HandshakeContext(ctx)

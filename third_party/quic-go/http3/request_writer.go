@@ -115,14 +115,9 @@ func (w *requestWriter) encodeHeaders(req *http.Request, addGzipHeader bool, tra
 	if req.Method != http.MethodConnect || isExtendedConnect {
 		path = req.URL.RequestURI()
 		if !validPseudoPath(path) {
-			orig := path
 			path = strings.TrimPrefix(path, req.URL.Scheme+"://"+host)
 			if !validPseudoPath(path) {
-				if req.URL.Opaque != "" {
-					return nil, fmt.Errorf("invalid request :path %q from URL.Opaque = %q", orig, req.URL.Opaque)
-				} else {
-					return nil, fmt.Errorf("invalid request :path %q", orig)
-				}
+				return nil, errors.New("invalid request :path")
 			}
 		}
 	}
@@ -136,7 +131,7 @@ func (w *requestWriter) encodeHeaders(req *http.Request, addGzipHeader bool, tra
 		}
 		for _, v := range vv {
 			if !httpguts.ValidHeaderFieldValue(v) {
-				return nil, fmt.Errorf("invalid HTTP header value %q for header %q", v, k)
+				return nil, fmt.Errorf("invalid HTTP header value for header %q", k)
 			}
 		}
 	}

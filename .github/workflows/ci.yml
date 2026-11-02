@@ -56,6 +56,8 @@ jobs:
         run: go test ./...
       - name: Verify QUIC trailer security backport
         run: go test github.com/sagernet/quic-go/http3
+      - name: Verify local fork archive and DNS response security
+        run: go test github.com/sagernet/sing-box/experimental/clashapi github.com/sagernet/sing-box/dns/transport/quic
       - name: Run focused race suite
         run: go test -race ./api/panel ./common/counter ./common/task ./common/accesslog ./conf ./core ./limiter ./node ./core/hy2 ./core/sing ./core/xray/app/dispatcher
       - name: Run bounded localhost proxy stress

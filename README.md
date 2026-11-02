@@ -1,9 +1,9 @@
 # V2bX hardened fork
 
-安全更新 `v0.1.3-security.3`：Go 1.27.3、默认关闭 MPTCP、更新依赖与
+安全更新 `v0.1.3-security.4`：Go 1.27.3、默认关闭 MPTCP、更新依赖与
 QUIC 安全回移。构建、兼容性变化与内核处置见
 [安全说明](docs/security-mptcp.md)。正式附件与发布状态以
-[GitHub Release](https://github.com/rmomo5285-droid/V2bX/releases/tag/v0.1.3-security.3)
+[GitHub Release](https://github.com/rmomo5285-droid/V2bX/releases/tag/v0.1.3-security.4)
 为准；已有节点的校验、备份和回滚要求见 [升级说明](docs/security-upgrade.md)。
 
 同时适配 Xboard v2/机器令牌静态节点，修复空用户列表撤销、流量失败重试、

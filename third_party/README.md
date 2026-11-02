@@ -41,3 +41,17 @@ go test -tags=http2legacy github.com/sagernet/quic-go/http3
 Go vulnerability tools do not automatically map all upstream advisories to
 renamed forks or local replacements. This backport was checked in source and
 tested separately; a clean scanner result alone would miss it.
+
+## Additional sing-box security hardening
+
+CodeQL follow-up on 2026-11-03 confines external UI ZIP writes using `os.Root`
+(Go >=1.25), rejects traversal, special files and symlink escapes, caps compressed
+UI archives at 128 MiB and extracted content at 512 MiB, and preserves root-level
+UI files. Files are created with mode 0644 under the process's identity.
+DNS-over-HTTP/3 bodies are bounded to 65,535 bytes even with an absent or false
+Content-Length. UID narrowing is bounded. Direct Tor proxy credentials, REALITY
+auth keys and rejected CCM API tokens are no longer written to logs.
+Dedicated archive and response-bound tests are run from the main module in CI.
+The local QUIC fork also omits raw header/trailer values and invalid URL paths
+from validation errors; privacy regressions cover malformed Authorization values.
+See `docs/codeql-review-20261103.md` for contextual findings that remain open.

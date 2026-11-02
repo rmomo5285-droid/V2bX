@@ -280,7 +280,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var ok bool
 		username, ok = s.userManager.Authenticate(clientToken)
 		if !ok {
-			s.logger.Warn("authentication failed for request from ", r.RemoteAddr, ": unknown key: ", clientToken)
+			s.logger.Warn("authentication failed for request from ", r.RemoteAddr, ": unknown key")
 			writeJSONError(w, r, http.StatusUnauthorized, "authentication_error", "invalid api key")
 			return
 		}

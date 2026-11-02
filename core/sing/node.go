@@ -51,6 +51,9 @@ type HttpupgradeNetworkConfig struct {
 }
 
 func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (option.Inbound, error) {
+	if info.Common == nil || info.Common.ServerPort < 1 || info.Common.ServerPort > 65535 {
+		return option.Inbound{}, fmt.Errorf("invalid listen port: expected 1..65535")
+	}
 	addr, err := netip.ParseAddr(c.ListenIP)
 	if err != nil {
 		return option.Inbound{}, fmt.Errorf("the listen ip not vail")
@@ -91,7 +94,10 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 		tls.Enabled = true
 		v := info.VAllss
 		tls.ServerName = v.TlsSettings.ServerName
-		port, _ := strconv.Atoi(v.TlsSettings.ServerPort)
+		port, err := parseServerPort(v.TlsSettings.ServerPort)
+		if err != nil {
+			return option.Inbound{}, fmt.Errorf("REALITY handshake port: %w", err)
+		}
 		var dest string
 		if v.TlsSettings.Dest != "" {
 			dest = v.TlsSettings.Dest
@@ -108,7 +114,7 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 			Handshake: option.InboundRealityHandshakeOptions{
 				ServerOptions: option.ServerOptions{
 					Server:     dest,
-					ServerPort: uint16(port),
+					ServerPort: port,
 				},
 			},
 			MaxTimeDifference: badoption.Duration(mtd),
@@ -141,6 +147,9 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 							return option.Inbound{}, fmt.Errorf("decode HttpRequest error: %s", err)
 						}
 						t.HTTPOptions.Host = request.Headers.Host
+						if len(request.Path) == 0 {
+							return option.Inbound{}, fmt.Errorf("HTTP transport request path is empty")
+						}
 						t.HTTPOptions.Path = request.Path[0]
 						t.HTTPOptions.Method = request.Method
 					}
@@ -153,7 +162,7 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 		case "ws":
 			var (
 				path    string
-				ed      int
+				ed      uint32
 				headers map[string]badoption.Listable[string]
 			)
 			if len(n.NetworkSettings) != 0 {
@@ -168,7 +177,13 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 					return option.Inbound{}, fmt.Errorf("parse path error: %s", err)
 				}
 				path = u.Path
-				ed, _ = strconv.Atoi(u.Query().Get("ed"))
+				if value := u.Query().Get("ed"); value != "" {
+					parsed, parseErr := strconv.ParseUint(value, 10, 32)
+					if parseErr != nil {
+						return option.Inbound{}, fmt.Errorf("invalid websocket early data: %w", parseErr)
+					}
+					ed = uint32(parsed)
+				}
 				headers = make(map[string]badoption.Listable[string], len(network.Headers))
 				for k, v := range network.Headers {
 					headers[k] = badoption.Listable[string]{
@@ -179,7 +194,7 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 			t.WebsocketOptions = option.V2RayWebsocketOptions{
 				Path:                path,
 				EarlyDataHeaderName: "Sec-WebSocket-Protocol",
-				MaxEarlyData:        uint32(ed),
+				MaxEarlyData:        ed,
 				Headers:             headers,
 			}
 		case "grpc":
@@ -266,7 +281,7 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 		case "ws":
 			var (
 				path    string
-				ed      int
+				ed      uint32
 				headers map[string]badoption.Listable[string]
 			)
 			if len(n.NetworkSettings) != 0 {
@@ -281,7 +296,13 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 					return option.Inbound{}, fmt.Errorf("parse path error: %s", err)
 				}
 				path = u.Path
-				ed, _ = strconv.Atoi(u.Query().Get("ed"))
+				if value := u.Query().Get("ed"); value != "" {
+					parsed, parseErr := strconv.ParseUint(value, 10, 32)
+					if parseErr != nil {
+						return option.Inbound{}, fmt.Errorf("invalid websocket early data: %w", parseErr)
+					}
+					ed = uint32(parsed)
+				}
 				headers = make(map[string]badoption.Listable[string], len(network.Headers))
 				for k, v := range network.Headers {
 					headers[k] = badoption.Listable[string]{
@@ -292,7 +313,7 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 			t.WebsocketOptions = option.V2RayWebsocketOptions{
 				Path:                path,
 				EarlyDataHeaderName: "Sec-WebSocket-Protocol",
-				MaxEarlyData:        uint32(ed),
+				MaxEarlyData:        ed,
 				Headers:             headers,
 			}
 		case "grpc":
@@ -321,18 +342,22 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 		if c.SingOptions.FallBackConfigs != nil {
 			// fallback handling
 			fallback := c.SingOptions.FallBackConfigs.FallBack
-			fallbackPort, err := strconv.Atoi(fallback.ServerPort)
-			if err == nil {
+			if fallback.Server != "" || fallback.ServerPort != "" {
+				fallbackPort, err := parseServerPort(fallback.ServerPort)
+				if err != nil {
+					return option.Inbound{}, fmt.Errorf("trojan fallback port: %w", err)
+				}
 				trojanoption.Fallback = &option.ServerOptions{
 					Server:     fallback.Server,
-					ServerPort: uint16(fallbackPort),
+					ServerPort: fallbackPort,
 				}
 			}
 			fallbackForALPNMap := c.SingOptions.FallBackConfigs.FallBackForALPN
 			fallbackForALPN := make(map[string]*option.ServerOptions, len(fallbackForALPNMap))
-			if err := processFallback(c, fallbackForALPN); err == nil {
-				trojanoption.FallbackForALPN = fallbackForALPN
+			if err := processFallback(c, fallbackForALPN); err != nil {
+				return option.Inbound{}, err
 			}
+			trojanoption.FallbackForALPN = fallbackForALPN
 		}
 		in.Options = trojanoption
 	case "tuic":

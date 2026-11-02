@@ -149,24 +149,29 @@ func (t *HTTP3Transport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS
 	if response.StatusCode != http.StatusOK {
 		return nil, E.New("unexpected status: ", response.Status)
 	}
-	var responseMessage mDNS.Msg
-	if response.ContentLength > 0 {
-		responseBuffer := buf.NewSize(int(response.ContentLength))
-		_, err = responseBuffer.ReadFullFrom(response.Body, int(response.ContentLength))
-		if err != nil {
-			return nil, err
-		}
-		err = responseMessage.Unpack(responseBuffer.Bytes())
-		responseBuffer.Release()
-	} else {
-		rawMessage, err = io.ReadAll(response.Body)
-		if err != nil {
-			return nil, err
-		}
-		err = responseMessage.Unpack(rawMessage)
+	rawMessage, err = readHTTP3DNSResponse(response.Body, response.ContentLength)
+	if err != nil {
+		return nil, err
 	}
+	var responseMessage mDNS.Msg
+	err = responseMessage.Unpack(rawMessage)
 	if err != nil {
 		return nil, err
 	}
 	return &responseMessage, nil
+}
+
+func readHTTP3DNSResponse(body io.Reader, contentLength int64) ([]byte, error) {
+	const maxDNSMessage = 65535
+	if contentLength > maxDNSMessage {
+		return nil, E.New("DNS response exceeds maximum wire message size")
+	}
+	data, err := io.ReadAll(io.LimitReader(body, maxDNSMessage+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxDNSMessage {
+		return nil, E.New("DNS response exceeds maximum wire message size")
+	}
+	return data, nil
 }

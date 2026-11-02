@@ -1,3 +1,5 @@
+//go:build go1.25
+
 package clashapi
 
 import (
@@ -13,7 +15,6 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/common/ntp"
@@ -90,18 +91,34 @@ func (s *Server) downloadZIP(body io.Reader, output string) error {
 		return err
 	}
 	defer os.Remove(tempFile.Name())
-	_, err = io.Copy(tempFile, body)
+	const maxArchiveBytes = 128 << 20
+	written, err := io.Copy(tempFile, io.LimitReader(body, maxArchiveBytes+1))
 	tempFile.Close()
 	if err != nil {
 		return err
+	}
+	if written > maxArchiveBytes {
+		return E.New("external UI archive exceeds 128 MiB")
 	}
 	reader, err := zip.OpenReader(tempFile.Name())
 	if err != nil {
 		return err
 	}
 	defer reader.Close()
+	root, err := os.OpenRoot(output)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	trimDir := zipIsInSingleDirectory(reader.File)
+	var totalSize uint64
 	for _, file := range reader.File {
+		if !filepath.IsLocal(file.Name) || strings.Contains(file.Name, "\\") || strings.Contains(file.Name, ":") {
+			return E.New("unsafe external UI archive entry")
+		}
+		if !file.Mode().IsRegular() && !file.Mode().IsDir() {
+			return E.New("non-regular external UI archive entry")
+		}
 		if file.FileInfo().IsDir() {
 			continue
 		}
@@ -109,16 +126,20 @@ func (s *Server) downloadZIP(body io.Reader, output string) error {
 		if trimDir {
 			pathElements = pathElements[1:]
 		}
-		saveDirectory := output
-		if len(pathElements) > 1 {
-			saveDirectory = filepath.Join(saveDirectory, filepath.Join(pathElements[:len(pathElements)-1]...))
+		savePath := filepath.Join(pathElements...)
+		if !filepath.IsLocal(savePath) {
+			return E.New("unsafe external UI archive path")
 		}
-		err = os.MkdirAll(saveDirectory, 0o755)
+		const maxExtractedBytes = 512 << 20
+		if file.UncompressedSize64 > maxExtractedBytes-totalSize {
+			return E.New("external UI extracted content exceeds 512 MiB")
+		}
+		totalSize += file.UncompressedSize64
+		err = root.MkdirAll(filepath.Dir(savePath), 0o755)
 		if err != nil {
 			return err
 		}
-		savePath := filepath.Join(saveDirectory, pathElements[len(pathElements)-1])
-		err = downloadZIPEntry(s.ctx, file, savePath)
+		err = downloadZIPEntry(root, file, savePath)
 		if err != nil {
 			return err
 		}
@@ -126,8 +147,8 @@ func (s *Server) downloadZIP(body io.Reader, output string) error {
 	return nil
 }
 
-func downloadZIPEntry(ctx context.Context, zipFile *zip.File, savePath string) error {
-	saveFile, err := filemanager.Create(ctx, savePath)
+func downloadZIPEntry(root *os.Root, zipFile *zip.File, savePath string) error {
+	saveFile, err := root.OpenFile(savePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
@@ -137,7 +158,8 @@ func downloadZIPEntry(ctx context.Context, zipFile *zip.File, savePath string) e
 		return err
 	}
 	defer reader.Close()
-	return common.Error(io.Copy(saveFile, reader))
+	_, err = io.Copy(saveFile, io.LimitReader(reader, int64(zipFile.UncompressedSize64)+1))
+	return err
 }
 
 func removeAllInDirectory(directory string) {
@@ -157,7 +179,7 @@ func zipIsInSingleDirectory(files []*zip.File) bool {
 			continue
 		}
 		pathElements := strings.Split(file.Name, "/")
-		if len(pathElements) == 0 {
+		if len(pathElements) < 2 {
 			return false
 		}
 		if singleDirectory == "" {

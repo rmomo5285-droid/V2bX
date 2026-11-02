@@ -77,7 +77,7 @@ func parseHeaders(decodeFn qpack.DecodeFunc, isRequest bool, sizeLimit int, head
 			return header{}, fmt.Errorf("header field is not lower-case: %s", h.Name)
 		}
 		if !httpguts.ValidHeaderFieldValue(h.Value) {
-			return header{}, fmt.Errorf("invalid header field value for %s: %q", h.Name, h.Value)
+			return header{}, fmt.Errorf("invalid header field value for %s", h.Name)
 		}
 		if h.IsPseudo() {
 			if readFirstRegularHeader {
@@ -128,7 +128,7 @@ func parseHeaders(decodeFn qpack.DecodeFunc, isRequest bool, sizeLimit int, head
 				}
 			}
 			if h.Name == "te" && h.Value != "trailers" {
-				return header{}, fmt.Errorf("invalid TE header field value: %q", h.Value)
+				return header{}, fmt.Errorf("invalid TE header field value")
 			}
 			readFirstRegularHeader = true
 			switch h.Name {
@@ -151,7 +151,7 @@ func parseHeaders(decodeFn qpack.DecodeFunc, isRequest bool, sizeLimit int, head
 		// use ParseUint instead of ParseInt, so that parsing fails on negative values
 		cl, err := strconv.ParseUint(contentLengthStr, 10, 63)
 		if err != nil {
-			return header{}, fmt.Errorf("invalid content length: %w", err)
+			return header{}, fmt.Errorf("invalid content length")
 		}
 		hdr.Headers.Set("Content-Length", contentLengthStr)
 		hdr.ContentLength = int64(cl)
@@ -165,7 +165,7 @@ func validateHeaderFieldNameAndValue(h qpack.HeaderField) error {
 		return fmt.Errorf("header field is not lower-case: %s", h.Name)
 	}
 	if !httpguts.ValidHeaderFieldValue(h.Value) {
-		return fmt.Errorf("invalid header field value for %s: %q", h.Name, h.Value)
+		return fmt.Errorf("invalid header field value for %s", h.Name)
 	}
 	return nil
 }
@@ -178,7 +178,7 @@ func validateRegularHeaderField(h qpack.HeaderField) error {
 		return fmt.Errorf("invalid header field name: %q", h.Name)
 	}
 	if h.Name == "te" && h.Value != "trailers" {
-		return fmt.Errorf("invalid TE header field value: %q", h.Value)
+		return fmt.Errorf("invalid TE header field value")
 	}
 	return nil
 }
@@ -278,7 +278,7 @@ func requestFromHeaders(decodeFn qpack.DecodeFunc, sizeLimit int, headerFields *
 	} else {
 		u, err = url.ParseRequestURI(hdr.Path)
 		if err != nil {
-			return nil, fmt.Errorf("invalid content length: %w", err)
+			return nil, fmt.Errorf("invalid content length")
 		}
 		requestURI = hdr.Path
 	}

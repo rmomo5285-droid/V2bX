@@ -78,7 +78,7 @@ func ResolveSocketByProcSearch(network string, source, _ netip.AddrPort) int32 {
 		}
 
 		if strings.EqualFold(local, fields[netIndexOfLocal]) {
-			uid, err := strconv.Atoi(fields[netIndexOfUid])
+			uid, err := strconv.ParseInt(fields[netIndexOfUid], 10, 32)
 			if err != nil {
 				return -1
 			}

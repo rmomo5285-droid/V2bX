@@ -133,7 +133,7 @@ func (t *resolve1Manager) createMetadata(sender dbus.Sender) adapter.InboundCont
 			if strings.HasPrefix(line, "Uid:") {
 				fields := strings.Fields(line)
 				if len(fields) >= 2 {
-					uid, parseErr := strconv.ParseUint(fields[1], 10, 32)
+					uid, parseErr := strconv.ParseUint(fields[1], 10, 31)
 					if parseErr != nil {
 						break
 					}
