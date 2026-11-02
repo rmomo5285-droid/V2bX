@@ -203,6 +203,10 @@ func TestProxyStress(t *testing.T) {
 		}
 	}
 	if path := os.Getenv("V2BX_STRESS_REPORT"); path != "" {
+		processScope := "Clients, proxy, mock panel and echo share one Go process and scheduler. Heap and RSS include clients and server."
+		if os.Getenv("V2BX_STRESS_ISOLATE_CLIENTS") == "1" {
+			processScope = "Clients run in a separate process and scheduler on the same host. Proxy, mock panel and echo share the parent process. Heap, RSS and goroutines cover the parent only, including mock panel and echo."
+		}
 		document := struct {
 			DateUTC     string         `json:"date_utc"`
 			OS          string         `json:"os"`
@@ -212,7 +216,7 @@ func TestProxyStress(t *testing.T) {
 			GOMAXPROCS  int            `json:"gomaxprocs"`
 			Scope       string         `json:"scope"`
 			Results     []stressResult `json:"results"`
-		}{time.Now().UTC().Format(time.RFC3339), runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(), runtime.GOMAXPROCS(0), "Single-process localhost clients, proxy and echo. VLESS TCP for Xray/sing; native Hysteria2 QUIC carrying TCP. No VPS, WAN or production-panel load. Latency histogram resolution 0.1ms; quantiles are upper bounds. Heap and RSS include clients and server; no CPU utilization measurement. Baseline GC precedes each round. Optional idle snapshots keep the node running; forced GC and OS release are diagnostic only. Repeated rounds reuse the same node and user; shutdown occurs after the last round.", results}
+		}{time.Now().UTC().Format(time.RFC3339), runtime.GOOS, runtime.GOARCH, runtime.Version(), runtime.NumCPU(), runtime.GOMAXPROCS(0), processScope + " VLESS TCP for Xray/sing; native Hysteria2 QUIC carrying TCP. No VPS, WAN or production-panel load. Latency histogram resolution 0.1ms; quantiles are upper bounds. No CPU utilization measurement. Baseline GC precedes each round. Optional idle snapshots keep the node running; forced GC and OS release are diagnostic only. Repeated rounds reuse the same node and user; shutdown occurs after the last round.", results}
 		data, err := json.MarshalIndent(document, "", "  ")
 		if err != nil {
 			t.Fatal(err)

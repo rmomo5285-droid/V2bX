@@ -49,7 +49,7 @@ while (($#)); do
     *) exit 2 ;;
   esac
 done
-[[ "$url" == https://github.com/rmomo5285-droid/V2bX/releases/download/v0.1.3-security.4/* ]] || exit 3
+[[ "$url" == https://github.com/rmomo5285-droid/V2bX/releases/download/v0.1.3-security.5/* ]] || exit 3
 file=${url##*/}
 [[ "$file" != "${TEST_FAIL_DOWNLOAD:-}" ]] || exit 22
 cp "$V2BX_SECURITY_TEST_ROOT/assets/$file" "$out"

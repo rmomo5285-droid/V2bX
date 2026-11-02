@@ -78,7 +78,7 @@ if ((directory)); then mkdir -p -- "$@"; else cp -- "$1" "$2"; fi
             binary += "# BAD_START\n"
         if bad_health:
             binary += "# BAD_HEALTH\n"
-        binary += "echo 'V2bX " + ("WRONG" if wrong_version else "v0.1.3-security.4") + " (test)'\n"
+        binary += "echo 'V2bX " + ("WRONG" if wrong_version else "v0.1.3-security.5") + " (test)'\n"
         with zipfile.ZipFile(archive, "w") as z:
             z.writestr("V2bX", binary)
             z.writestr("../../escape", "must not extract")
@@ -95,7 +95,7 @@ bash "$V2BX_TEST_SCRIPT" --archive "$V2BX_TEST_ARCHIVE" --sha256 "$V2BX_TEST_SHA
     def test_success_and_backup(self):
         r = self.run_upgrade()
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("v0.1.3-security.4", self.binary.read_text())
+        self.assertIn("v0.1.3-security.5", self.binary.read_text())
         backups = list(self.root.glob("var/lib/v2bx-security-upgrade/backup-*/V2bX"))
         self.assertEqual(len(backups), 1)
         self.assertIn("OLD", backups[0].read_text())

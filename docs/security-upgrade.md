@@ -1,6 +1,6 @@
 # 安全版本升级
 
-`scripts/update-security.sh` 固定下载 `v0.1.3-security.4`，按 Linux 架构选择
+`scripts/update-security.sh` 固定下载 `v0.1.3-security.5`，按 Linux 架构选择
 Release 压缩包，分别校验压缩包及离线升级助手的 SHA-256，再调用助手。
 入口脚本本身应使用发布后确认的固定 SHA-256 校验；不能直接执行未校验的网络响应。
 同一 GitHub Release 提供文件与校验值，可以发现损坏及错包，不能抵御整个发布账号被入侵。
@@ -21,4 +21,4 @@ bash upgrade-security.sh --archive /absolute/path/to/V2bX-platform.zip --sha256 
 暂时关闭 MPTCP 的方法见 `security-mptcp.md`。
 
 发布工作流先验证源码，所有构建固定到通过验证的同一提交；附件上传到草稿，
-重新下载并验证全部 SHA-256 后才公开。已公开版本禁止由该工作流覆盖。
+重新下载并验证全部 SHA-256 后保留草稿；维护者交叉检查同一提交全部验收后另行公开。已公开版本禁止由该工作流覆盖。

@@ -62,6 +62,8 @@ jobs:
         run: go test -race ./api/panel ./common/counter ./common/task ./common/accesslog ./conf ./core ./limiter ./node ./core/hy2 ./core/sing ./core/xray/app/dispatcher
       - name: Run bounded localhost proxy stress
         env:
+          GOMAXPROCS: '2'
+          V2BX_STRESS_ISOLATE_CLIENTS: '1'
           V2BX_STRESS: '1'
           V2BX_STRESS_SECONDS: '8'
           V2BX_STRESS_CONCURRENCY: '32'
@@ -71,6 +73,8 @@ jobs:
         run: go test -count=1 -timeout 3m -run '^TestProxyStress$' -v ./limiter
       - name: Run 128-client persistent burst and paced churn
         env:
+          GOMAXPROCS: '2'
+          V2BX_STRESS_ISOLATE_CLIENTS: '1'
           V2BX_STRESS: '1'
           V2BX_STRESS_SECONDS: '3'
           V2BX_STRESS_CONCURRENCY: '128'
@@ -78,6 +82,8 @@ jobs:
         run: go test -count=1 -timeout 3m -run '^TestProxyStress$' -v ./limiter
       - name: Repeat paced Hysteria2 churn without restarting the node
         env:
+          GOMAXPROCS: '2'
+          V2BX_STRESS_ISOLATE_CLIENTS: '1'
           V2BX_STRESS: '1'
           V2BX_STRESS_SECONDS: '3'
           V2BX_STRESS_CONCURRENCY: '128'
@@ -86,6 +92,8 @@ jobs:
         run: go test -count=1 -timeout 3m -run '^TestProxyStress/hysteria2/churn$' -v ./limiter
       - name: Observe natural memory recovery with nodes running
         env:
+          GOMAXPROCS: '2'
+          V2BX_STRESS_ISOLATE_CLIENTS: '1'
           V2BX_STRESS: '1'
           V2BX_STRESS_SECONDS: '3'
           V2BX_STRESS_CONCURRENCY: '32'

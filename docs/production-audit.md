@@ -55,3 +55,12 @@ GO-2026-5288（Hysteria OOM）及 GO-2026-5932（OpenPGP 状态）保留在安�
 尚未验证 Docker 构建、全部发布架构的运行、真实生产面板和线上负载；未连接或改动用户服务器。发布状态以 GitHub Release 为准，默认分支源码推送和发布均不等于服务器已升级。
 
 参考：[Go 官方 MPTCP 说明](https://github.com/golang/go/issues/82717)、[Go 1.27.3 正式版本](https://go.dev/doc/devel/release#go1.27.3)、[Ubuntu CVE 追踪](https://ubuntu.com/security/CVE-2026-98432)。
+
+## 发布交叉核验更新
+
+`.4` 标签的 Release 运行通过后，交叉核对发现同一提交两次独立 Go validation
+失败，已移出 Latest、标为预发布并公开失败说明。原生 128 并发 Hysteria2 容量
+在受限调度条件下仍会失败，未作为生产修复宣称。独立客户端对照与 `.5` 限定
+验收口径见 `release-cross-check-20261103.md`；构建工作流以后只产生已验证的
+草稿，交叉检查同一提交后才另行发布。源代码更新、预发布附件及限定负载测试
+均不等于实际服务器已升级或不存在其他漏洞。
