@@ -34,7 +34,7 @@ jobs:
   validation:
     uses: ./.github/workflows/ci.yml
     with:
-      source_ref: ${{ inputs.release_tag || github.sha }}
+      source_ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.sha }}
 
   build:
     needs: validation
@@ -253,7 +253,7 @@ jobs:
           fi
           (cd release-assets && sha256sum -c ./*.sha256)
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
-          [[ $(git rev-parse "$RELEASE_TAG^{commit}") == "$VALIDATED_SHA" ]]
+          [[ $(git rev-parse "refs/tags/$RELEASE_TAG^{commit}") == "$VALIDATED_SHA" ]]
           notes="docs/releases/$RELEASE_TAG.md"
           test -f "$notes"
           # The helper is version-pinned; a new release requires reviewing it.
