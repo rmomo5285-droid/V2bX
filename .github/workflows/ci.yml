@@ -67,13 +67,21 @@ jobs:
           V2BX_STRESS_IDLE_SECONDS: '5'
           V2BX_STRESS_REPORT: ${{ github.workspace }}/proxy-stress.json
         run: go test -count=1 -timeout 3m -run '^TestProxyStress$' -v ./limiter
-      - name: Run synchronized 128-client burst
+      - name: Run 128-client persistent burst and paced churn
         env:
           V2BX_STRESS: '1'
           V2BX_STRESS_SECONDS: '3'
           V2BX_STRESS_CONCURRENCY: '128'
           V2BX_STRESS_REPORT: ${{ github.workspace }}/proxy-stress-burst.json
         run: go test -count=1 -timeout 3m -run '^TestProxyStress$' -v ./limiter
+      - name: Repeat paced Hysteria2 churn without restarting the node
+        env:
+          V2BX_STRESS: '1'
+          V2BX_STRESS_SECONDS: '3'
+          V2BX_STRESS_CONCURRENCY: '128'
+          V2BX_STRESS_ROUNDS: '5'
+          V2BX_STRESS_REPORT: ${{ github.workspace }}/proxy-churn-repeat.json
+        run: go test -count=1 -timeout 3m -run '^TestProxyStress/hysteria2/churn$' -v ./limiter
       - name: Observe natural memory recovery with nodes running
         env:
           V2BX_STRESS: '1'
@@ -89,6 +97,7 @@ jobs:
           path: |
             proxy-stress.json
             proxy-stress-burst.json
+            proxy-churn-repeat.json
             proxy-memory-natural.json
           if-no-files-found: warn
       - name: Verify upgrade and rollback

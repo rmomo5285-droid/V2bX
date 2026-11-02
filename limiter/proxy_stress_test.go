@@ -4,6 +4,7 @@ package limiter_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ type stressResult struct {
 	Concurrency               int              `json:"concurrency"`
 	PayloadBytes              int              `json:"payload_bytes"`
 	ChurnRateLimit            int              `json:"churn_rate_limit_per_second"`
+	ChurnPacing               string           `json:"churn_pacing,omitempty"`
 	ElapsedSeconds            float64          `json:"elapsed_seconds"`
 	SuccessfulExchanges       uint64           `json:"successful_exchanges"`
 	SuccessfulConnections     uint64           `json:"successful_connections"`
@@ -227,6 +229,10 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 	r.MemorySnapshots = append(r.MemorySnapshots, snapshotMemory(f, "baseline_after_gc"))
 	if mode == "churn" {
 		r.ChurnRateLimit = churnRate
+		r.ChurnPacing = "global-ticker"
+		if os.Getenv("V2BX_STRESS_BURST_CHURN") == "1" {
+			r.ChurnPacing = "synchronized-workers"
+		}
 	}
 	var histogram [50001]atomic.Uint64
 	var successes, connections, failures atomic.Uint64
@@ -282,6 +288,16 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 	startGate := make(chan struct{})
 	start := time.Now()
 	deadline := start.Add(duration)
+	workContext, cancelWork := context.WithDeadline(context.Background(), deadline)
+	defer cancelWork()
+	var churnTick <-chan time.Time
+	if mode == "churn" && r.ChurnPacing == "global-ticker" {
+		// Share one admission clock. Per-worker sleeps synchronize workers into
+		// repeated concurrency-sized handshake bursts instead of a paced rate.
+		ticker := time.NewTicker(time.Second / time.Duration(churnRate))
+		defer ticker.Stop()
+		churnTick = ticker.C
+	}
 	for i := 0; i < concurrency; i++ {
 		workers.Add(1)
 		go func(worker int) {
@@ -296,6 +312,16 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 			}()
 			<-startGate
 			for time.Now().Before(deadline) {
+				if churnTick != nil {
+					select {
+					case <-workContext.Done():
+						return
+					case <-churnTick:
+					}
+					if time.Now().After(deadline) {
+						return
+					}
+				}
 				operationStart := time.Now()
 				if connection == nil {
 					var err error
@@ -338,9 +364,11 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 					connection = nil
 					// Bound client ephemeral-port and certificate-handshake pressure.
 					// This is a paced stability workload, not maximum connection capacity.
-					interval := time.Second * time.Duration(concurrency) / time.Duration(churnRate)
-					if pause := interval - time.Since(operationStart); pause > 0 {
-						time.Sleep(pause)
+					if churnTick == nil {
+						interval := time.Second * time.Duration(concurrency) / time.Duration(churnRate)
+						if pause := interval - time.Since(operationStart); pause > 0 {
+							time.Sleep(pause)
+						}
 					}
 				}
 			}

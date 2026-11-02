@@ -1,9 +1,10 @@
 # V2bX hardened fork
 
-本地安全候选版 `v0.1.3-security.1`：Go 1.27.3、默认关闭 MPTCP、更新依赖与
+安全更新 `v0.1.3-security.2`：Go 1.27.3、默认关闭 MPTCP、更新依赖与
 QUIC 安全回移。构建、兼容性变化与内核处置见
-[安全说明](docs/security-mptcp.md)。此候选版尚未发布到 GitHub；下面的旧版安装命令
-不会安装这些修复。
+[安全说明](docs/security-mptcp.md)。正式附件与发布状态以
+[GitHub Release](https://github.com/rmomo5285-droid/V2bX/releases/tag/v0.1.3-security.2)
+为准；已有节点的校验、备份和回滚要求见 [升级说明](docs/security-upgrade.md)。
 
 同时适配 Xboard v2/机器令牌静态节点，修复空用户列表撤销、流量失败重试、
 设备查询失败与任务重启问题；配置和移植范围见 [Xboard 适配记录](docs/upstream-integration.md)。
@@ -15,7 +16,7 @@ A V2Board/XBoard node server based on multiple cores, modified from XrayR.
 一个基于多种内核的 V2Board/XBoard 节点服务端，修改自 XrayR，支持 V2Ray、
 Trojan、Shadowsocks 和 Hysteria 等协议。
 
-当前生产组合为核心 [`v0.1.2`](https://github.com/rmomo5285-droid/V2bX/releases/tag/v0.1.2)
+原生产基线为核心 [`v0.1.2`](https://github.com/rmomo5285-droid/V2bX/releases/tag/v0.1.2)
 与部署脚本 [`v0.1.3`](https://github.com/rmomo5285-droid/V2bX-script/releases/tag/v0.1.3)。
 正式节点应使用固定版本的 Release；默认分支用于同步上游和后续开发，不应替代
 生产版本锁定。

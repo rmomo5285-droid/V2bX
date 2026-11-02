@@ -62,6 +62,14 @@ RSS 读取失败或平台不支持时为 0。HeapIdle 不等于已经归还给�
 
 ## 判定与边界
 
+从 `v0.1.3-security.2` 起，短连接默认使用一个共享 ticker 按全局速率准入，
+JSON 的 `churn_pacing` 为 `global-ticker`；时钟延迟时不会补发积压令牌。
+早期测试的每线程固定间隔会让 128 个线程周期性齐发，属于重复握手突发，
+不能把速率上限误读为平滑的 1000 次/秒。
+设置 `V2BX_STRESS_BURST_CHURN=1` 可复现原模式（`synchronized-workers`）。
+持久连接模式仍从同一闸门同时发起全部连接。任何连接失败继续使测试失败，未添加重试。
+Linux CI 还会在同一节点连续执行五轮 128 并发的默认短连接稳定性测试。
+
 请求错误、内容错误、计费字节不一致、自然空闲后仍有在线设备、最后关闭后 6 秒内 goroutine 未回到基线，均使测试失败。
 延迟采用 0.1 ms 直方图，输出分位数是桶上界。客户端和服务端共享 CPU；
 Windows 回环吞吐不能代表 VPS 带宽、Linux 网络栈或不同协议的公平性能排名。
@@ -90,3 +98,8 @@ Linux [run 41473791934](https://github.com/rmomo5285-droid/V2bX/actions/runs/414
 已通过全量测试、race、32/128 并发六场景、三个核心各 180 秒自然回收观察、升级回滚及 vet。
 180 秒采样时在线设备均清零，自然 GC 次数均增加，RSS 均下降。完整数据见
 `validation-linux-20261102.md`；JSON 及日志见该运行工件。Linux 本轮通过不会抹去 Windows 及单执行线程诊断的失败结果。
+
+后续 Linux [run 41481256146](https://github.com/rmomo5285-droid/V2bX/actions/runs/41481256146)
+在原模式的 Hysteria2 128 并发短连接中记录 10 次 CONNECTION_REFUSED，成功交换计费一致，
+发布已被拦截。该结果说明此前一次通过不能保证这种周期突发在所有 runner 上稳定。
+新模式的验证与原模式的容量失败分别保留，未修改生产 QUIC 队列大小或客户端重试。
