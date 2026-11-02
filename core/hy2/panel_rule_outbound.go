@@ -26,6 +26,14 @@ func (o *panelRuleOutbound) TCP(reqAddr string) (net.Conn, error) {
 	return o.outbound.TCP(reqAddr)
 }
 
+// CheckUDP also checks the configured Hysteria ACL when a session changes target.
+func (o *panelRuleOutbound) CheckUDP(reqAddr string) error {
+	if err := o.check("udp", reqAddr); err != nil {
+		return err
+	}
+	return o.outbound.CheckUDP(reqAddr)
+}
+
 func (o *panelRuleOutbound) UDP(reqAddr string) (server.UDPConn, error) {
 	if err := o.check("udp", reqAddr); err != nil {
 		return nil, err
@@ -42,7 +50,7 @@ func (o *panelRuleOutbound) UDP(reqAddr string) (server.UDPConn, error) {
 	return &panelRuleUDPConn{
 		UDPConn: conn,
 		check: func(reqAddr string) error {
-			return o.check("udp", reqAddr)
+			return o.CheckUDP(reqAddr)
 		},
 		flow:   limit.NewUDPFlowGuard(),
 		tag:    o.tag,

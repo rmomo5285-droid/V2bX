@@ -19,16 +19,17 @@ jobs:
     timeout-minutes: 45
     env:
       GOEXPERIMENT: jsonv2
+      GOFLAGS: -tags=http2legacy,sing,xray,hysteria2,with_quic,with_grpc,with_utls,with_wireguard,with_acme,with_gvisor
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25.0"
+          go-version-file: go.mod
           cache: true
       - name: Verify formatting
         shell: bash
         run: |
-          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          unformatted=$(gofmt -l $(git ls-files '*.go' ':!:third_party/**'))
           if [[ -n "$unformatted" ]]; then
             printf 'Files requiring gofmt:\n%s\n' "$unformatted"
             exit 1
@@ -36,11 +37,16 @@ jobs:
           git diff --check
       - name: Run full test suite
         run: go test ./...
+      - name: Verify QUIC trailer security backport
+        run: go test github.com/sagernet/quic-go/http3
       - name: Run focused race suite
-        run: go test -race ./common/accesslog ./limiter ./node ./core/hy2 ./core/sing ./core/xray/app/dispatcher
+        run: go test -race ./api/panel ./common/counter ./common/task ./common/accesslog ./conf ./core ./limiter ./node ./core/hy2 ./core/sing ./core/xray/app/dispatcher
       - name: Verify upgrade and rollback
         run: |
           bash -n scripts/upgrade-accesslog.sh
           sudo env PATH="$PATH" bash scripts/tests/upgrade-accesslog-test.sh
+          bash -n scripts/upgrade-security.sh
+          bash -n scripts/mitigate-mptcp.sh
+          python3 scripts/tests/upgrade-security-test.py
       - name: Run vet
         run: go vet ./...

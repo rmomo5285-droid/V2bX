@@ -1,5 +1,13 @@
 # V2bX hardened fork
 
+本地安全候选版 `v0.1.3-security.1`：Go 1.27.3、默认关闭 MPTCP、更新依赖与
+QUIC 安全回移。构建、兼容性变化与内核处置见
+[安全说明](docs/security-mptcp.md)。此候选版尚未发布到 GitHub；下面的旧版安装命令
+不会安装这些修复。
+
+同时适配 Xboard v2/机器令牌静态节点，修复空用户列表撤销、流量失败重试、
+设备查询失败与任务重启问题；配置和移植范围见 [Xboard 适配记录](docs/upstream-integration.md)。
+
 [![](https://img.shields.io/badge/TgChat-UnOfficialV2Board%E4%BA%A4%E6%B5%81%E7%BE%A4-green)](https://t.me/unofficialV2board)
 [![](https://img.shields.io/badge/TgChat-YuzukiProjects%E4%BA%A4%E6%B5%81%E7%BE%A4-blue)](https://t.me/YuzukiProjects)
 

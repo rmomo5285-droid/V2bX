@@ -1,1 +1,4 @@
 *.sh text eol=lf
+*.go text eol=lf
+# Preserve upstream vendored documentation and generated comment whitespace.
+third_party/** -whitespace

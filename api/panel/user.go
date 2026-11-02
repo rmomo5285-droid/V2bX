@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"encoding/json/jsontext"
-	"encoding/json/v2"
+	"encoding/json"
+	"io"
 
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -32,8 +32,8 @@ type AliveMap struct {
 
 // GetUserList will pull user from v2board
 func (c *Client) GetUserList() ([]UserInfo, error) {
-	const path = "/api/v1/server/UniProxy/user"
-	r, err := c.client.R().
+	path := c.apiPath("user")
+	r, err := c.request().
 		SetHeader("If-None-Match", c.userEtag).
 		SetHeader("X-Response-Format", "msgpack").
 		SetDoNotParseResponse(true).
@@ -56,35 +56,30 @@ func (c *Client) GetUserList() ([]UserInfo, error) {
 		if err := decoder.Decode(userlist); err != nil {
 			return nil, fmt.Errorf("decode user list error: %w", err)
 		}
-	} else {
-		dec := jsontext.NewDecoder(r.RawResponse.Body)
-		for {
-			tok, err := dec.ReadToken()
-			if err != nil {
-				return nil, fmt.Errorf("decode user list error: %w", err)
-			}
-			if tok.Kind() == '"' && tok.String() == "users" {
-				break
-			}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return nil, fmt.Errorf("decode user list error: trailing MessagePack data")
 		}
-		tok, err := dec.ReadToken()
-		if err != nil {
+	} else {
+		decoder := json.NewDecoder(r.RawResponse.Body)
+		if err := decoder.Decode(userlist); err != nil {
 			return nil, fmt.Errorf("decode user list error: %w", err)
 		}
-		if tok.Kind() != '[' {
-			return nil, fmt.Errorf(`decode user list error: expected "users" array`)
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return nil, fmt.Errorf("decode user list error: trailing JSON data")
 		}
-		for dec.PeekKind() != ']' {
-			val, err := dec.ReadValue()
-			if err != nil {
-				return nil, fmt.Errorf("decode user list error: read user object: %w", err)
-			}
-			var u UserInfo
-			if err := json.Unmarshal(val, &u); err != nil {
-				return nil, fmt.Errorf("decode user list error: unmarshal user error: %w", err)
-			}
-			userlist.Users = append(userlist.Users, u)
+	}
+	// nil means unchanged only for HTTP 304. A valid empty array revokes all.
+	if userlist.Users == nil {
+		return nil, fmt.Errorf("decode user list error: missing or null users array")
+	}
+	ids, uuids := make(map[int]bool), make(map[string]bool)
+	for _, user := range userlist.Users {
+		if user.Id <= 0 || user.Uuid == "" || ids[user.Id] || uuids[user.Uuid] {
+			return nil, fmt.Errorf("decode user list error: invalid or duplicate user identity")
 		}
+		ids[user.Id], uuids[user.Uuid] = true, true
 	}
 	c.userEtag = r.Header().Get("ETag")
 	return userlist.Users, nil
@@ -92,27 +87,20 @@ func (c *Client) GetUserList() ([]UserInfo, error) {
 
 // GetUserAlive will fetch the alive_ip count for users
 func (c *Client) GetUserAlive() (map[int]int, error) {
-	c.AliveMap = &AliveMap{}
-	const path = "/api/v1/server/UniProxy/alivelist"
-	r, err := c.client.R().
-		ForceContentType("application/json").
-		Get(path)
-	if err != nil || r.StatusCode() >= 399 {
-		c.AliveMap.Alive = make(map[int]int)
-		return c.AliveMap.Alive, nil
+	path := c.apiPath("alivelist")
+	r, err := c.request().ForceContentType("application/json").Get(path)
+	if err = c.checkResponse(r, path, err); err != nil {
+		return nil, err
 	}
-	if r == nil || r.RawResponse == nil {
-		fmt.Printf("received nil response or raw response")
-		c.AliveMap.Alive = make(map[int]int)
-		return c.AliveMap.Alive, nil
+	var alive AliveMap
+	if err := json.Unmarshal(r.Body(), &alive); err != nil {
+		return nil, fmt.Errorf("decode user alive list: %w", err)
 	}
-	defer r.RawResponse.Body.Close()
-	if err := json.Unmarshal(r.Body(), c.AliveMap); err != nil {
-		fmt.Printf("unmarshal user alive list error: %s", err)
-		c.AliveMap.Alive = make(map[int]int)
+	if alive.Alive == nil {
+		return nil, fmt.Errorf("decode user alive list: missing alive object")
 	}
-
-	return c.AliveMap.Alive, nil
+	c.AliveMap = &alive
+	return alive.Alive, nil
 }
 
 type UserTraffic struct {
@@ -127,12 +115,12 @@ func (c *Client) ReportUserTraffic(userTraffic []UserTraffic) error {
 	for i := range userTraffic {
 		data[userTraffic[i].UID] = []int64{userTraffic[i].Upload, userTraffic[i].Download}
 	}
-	const path = "/api/v1/server/UniProxy/push"
-	r, err := c.client.R().
+	path := c.apiPath("push")
+	r, err := c.request().
 		SetBody(data).
 		ForceContentType("application/json").
 		Post(path)
-	err = c.checkResponse(r, path, err)
+	err = c.checkAcknowledgement(r, path, err)
 	if err != nil {
 		return err
 	}
@@ -140,12 +128,12 @@ func (c *Client) ReportUserTraffic(userTraffic []UserTraffic) error {
 }
 
 func (c *Client) ReportNodeOnlineUsers(data *map[int][]string) error {
-	const path = "/api/v1/server/UniProxy/alive"
-	r, err := c.client.R().
+	path := c.apiPath("alive")
+	r, err := c.request().
 		SetBody(data).
 		ForceContentType("application/json").
 		Post(path)
-	err = c.checkResponse(r, path, err)
+	err = c.checkAcknowledgement(r, path, err)
 
 	if err != nil {
 		return err

@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 
 	"github.com/InazumaV/V2bX/common/accesslog"
@@ -60,8 +62,10 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		f, err := os.OpenFile(c.LogConfig.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			log.WithField("err", err).Error("Open log file failed, using stdout instead")
+		} else {
+			log.SetOutput(f)
+			defer func() { log.SetOutput(os.Stderr); _ = f.Close() }()
 		}
-		log.SetOutput(f)
 	}
 	limiter.Init()
 	statusPath := filepath.Join(filepath.Dir(config), "accesslog.status.json")
@@ -79,11 +83,20 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	err = vc.Start()
 	if err != nil {
 		log.WithField("err", err).Error("Start core failed")
+		_ = vc.Close()
 		return
 	}
-	defer func() { _ = vc.Close() }()
 	log.Info("Core ", vc.Type(), " started")
 	nodes := node.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	var lifecycle sync.Mutex
+	defer func() {
+		cancel()
+		lifecycle.Lock()
+		defer lifecycle.Unlock()
+		nodes.Close()
+		_ = vc.Close()
+	}()
 	err = nodes.Start(c.NodeConfig, vc)
 	if err != nil {
 		log.WithField("err", err).Error("Run nodes failed")
@@ -93,31 +106,50 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	xdns := os.Getenv("XRAY_DNS_PATH")
 	sdns := os.Getenv("SING_DNS_PATH")
 	if watch {
-		err = c.Watch(config, xdns, sdns, func() {
+		err = c.WatchContext(ctx, config, xdns, sdns, func(next *conf.Conf) {
+			lifecycle.Lock()
+			defer lifecycle.Unlock()
+			if ctx.Err() != nil {
+				return
+			}
+			// Construct first, preserving the running instance on invalid core settings.
+			replacement, buildErr := vCore.NewCore(next.CoresConfig)
+			if buildErr != nil {
+				log.WithError(buildErr).Error("Reload core configuration rejected")
+				return
+			}
+			previous := c
 			nodes.Close()
+			if err := vc.Close(); err != nil {
+				log.WithError(err).Warn("Close previous core failed")
+			}
+			vc = replacement
+			restart := func(config *conf.Conf) error {
+				if err := vc.Start(); err != nil {
+					_ = vc.Close()
+					return err
+				}
+				if err := nodes.Start(config.NodeConfig, vc); err != nil {
+					_ = vc.Close()
+					return err
+				}
+				return nil
+			}
+			if err := restart(next); err != nil {
+				log.WithError(err).Error("Replacement failed; restoring previous configuration")
+				restored, restoreErr := vCore.NewCore(previous.CoresConfig)
+				if restoreErr == nil {
+					vc = restored
+					restoreErr = restart(previous)
+				}
+				if restoreErr != nil {
+					log.WithError(restoreErr).Error("Previous configuration could not be restored")
+				}
+				return
+			}
+			c = next
 			if err := accesslog.Configure(c.AccessLog, statusPath); err != nil {
-				log.WithField("err", err).Error("Reload access log configuration failed")
-			}
-			err = vc.Close()
-			if err != nil {
-				log.WithField("err", err).Error("Restart node failed")
-				return
-			}
-			vc, err = vCore.NewCore(c.CoresConfig)
-			if err != nil {
-				log.WithField("err", err).Error("New core failed")
-				return
-			}
-			err = vc.Start()
-			if err != nil {
-				log.WithField("err", err).Error("Start core failed")
-				return
-			}
-			log.Info("Core ", vc.Type(), " restarted")
-			err = nodes.Start(c.NodeConfig, vc)
-			if err != nil {
-				log.WithField("err", err).Error("Run nodes failed")
-				return
+				log.WithError(err).Error("Reload access log configuration failed")
 			}
 			log.Info("Nodes restarted")
 			runtime.GC()
@@ -133,7 +165,7 @@ func serverHandle(_ *cobra.Command, _ []string) {
 	{
 		osSignals := make(chan os.Signal, 1)
 		signal.Notify(osSignals, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(osSignals)
 		<-osSignals
 	}
-	nodes.Close()
 }

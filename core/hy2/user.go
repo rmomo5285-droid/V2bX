@@ -63,43 +63,28 @@ func (a *nodeAuthenticator) Authenticate(addr net.Addr, auth string, tx uint64) 
 
 func (h *Hysteria2) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	h.Auth.mutex.Lock()
+	defer h.Auth.mutex.Unlock()
 	if h.Auth.usersMap[p.Tag] == nil {
 		h.Auth.usersMap[p.Tag] = make(map[string]int)
 	}
-	h.Auth.mutex.Unlock()
-	var wg sync.WaitGroup
 	for _, user := range p.Users {
-		wg.Add(1)
-		go func(u panel.UserInfo) {
-			defer wg.Done()
-			h.Auth.mutex.Lock()
-			h.Auth.usersMap[p.Tag][u.Uuid] = u.Id
-			h.Auth.mutex.Unlock()
-		}(user)
+		h.Auth.usersMap[p.Tag][user.Uuid] = user.Id
 	}
-	wg.Wait()
 	return len(p.Users), nil
 }
 
 func (h *Hysteria2) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) error {
-	var wg sync.WaitGroup
 	node, nodeExists := h.node(tag)
+	h.Auth.mutex.Lock()
+	defer h.Auth.mutex.Unlock()
 	for _, user := range users {
-		wg.Add(1)
+		delete(h.Auth.usersMap[tag], user.Uuid)
 		if nodeExists {
 			if v, ok := node.TrafficLogger.(*HookServer).Counter.Load(tag); ok {
-				c := v.(*counter.TrafficCounter)
-				c.Delete(user.Uuid)
+				v.(*counter.TrafficCounter).Delete(user.Uuid)
 			}
 		}
-		go func(u panel.UserInfo) {
-			defer wg.Done()
-			h.Auth.mutex.Lock()
-			delete(h.Auth.usersMap[tag], u.Uuid)
-			h.Auth.mutex.Unlock()
-		}(user)
 	}
-	wg.Wait()
 	return nil
 }
 
@@ -121,8 +106,7 @@ func (h *Hysteria2) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTra
 			down := traffic.DownCounter.Load()
 			if up+down > hook.ReportMinTrafficBytes {
 				if reset {
-					traffic.UpCounter.Store(0)
-					traffic.DownCounter.Store(0)
+					up, down = traffic.Read(true)
 				}
 				if h.Auth.usersMap[tag][uuid] == 0 {
 					c.Delete(uuid)

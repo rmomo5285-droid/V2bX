@@ -395,7 +395,9 @@ func getInboundOptions(tag string, info *panel.NodeInfo, c *conf.Options) (optio
 }
 
 func (b *Sing) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) error {
+	b.users.mapLock.Lock()
 	b.nodeReportMinTrafficBytes[tag] = config.ReportMinTraffic * 1024
+	b.users.mapLock.Unlock()
 	c, err := getInboundOptions(tag, info, config)
 	if err != nil {
 		return err

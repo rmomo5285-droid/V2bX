@@ -1,7 +1,6 @@
 package node
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 
@@ -14,7 +13,13 @@ import (
 )
 
 type Controller struct {
+	monitorMu                 sync.Mutex
+	stateMu                   sync.RWMutex
+	closed                    bool
+	nodeAdded                 bool
 	onlineReportMu            sync.Mutex
+	trafficReportMu           sync.Mutex
+	pendingTraffic            map[int]panel.UserTraffic
 	server                    vCore.Core
 	apiClient                 *panel.Client
 	tag                       string
@@ -43,7 +48,26 @@ func NewController(server vCore.Core, api *panel.Client, config *conf.Options) *
 }
 
 // Start implement the Start() function of the service interface
-func (c *Controller) Start() error {
+func (c *Controller) Start() (startErr error) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.closed {
+		return fmt.Errorf("controller is closed")
+	}
+	defer func() {
+		if startErr != nil {
+			if c.nodeAdded {
+				_ = c.server.DelNode(c.tag)
+				c.nodeAdded = false
+			}
+			if c.limiter != nil {
+				limiter.DeleteLimiter(c.tag)
+				c.limiter = nil
+			}
+			c.apiClient.CloseRequests()
+			c.closed = true
+		}
+	}()
 	// First fetch Node Info
 	var err error
 	node, err := c.apiClient.GetNodeInfo()
@@ -54,9 +78,6 @@ func (c *Controller) Start() error {
 	c.userList, err = c.apiClient.GetUserList()
 	if err != nil {
 		return fmt.Errorf("get user list error: %s", err)
-	}
-	if len(c.userList) == 0 {
-		return errors.New("add users error: not have any user")
 	}
 	c.aliveMap, err = c.apiClient.GetUserAlive()
 	if err != nil {
@@ -69,7 +90,11 @@ func (c *Controller) Start() error {
 	}
 
 	// add limiter
+	if _, err := limiter.GetLimiter(c.tag); err == nil {
+		return fmt.Errorf("duplicate node tag %q", c.tag)
+	}
 	l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, c.aliveMap)
+	c.limiter = l
 	l.NodeID = node.Id
 	l.OnlineMinTraffic = c.Options.DeviceOnlineMinTraffic * 1000
 	// add rule limiter
@@ -84,17 +109,20 @@ func (c *Controller) Start() error {
 		}
 	}
 	// Add new tag
-	err = c.server.AddNode(c.tag, node, c.Options)
+	c.nodeAdded = true // Also clean up a partially constructed inbound on failure.
+	err = safeCoreCall("add initial node", func() error { return c.server.AddNode(c.tag, node, c.Options) })
 	if err != nil {
 		return fmt.Errorf("add new node error: %s", err)
 	}
-	added, err := c.server.AddUsers(&vCore.AddUsersParams{
-		Tag:      c.tag,
-		Users:    c.userList,
-		NodeInfo: node,
-	})
-	if err != nil {
-		return fmt.Errorf("add users error: %s", err)
+	added := 0
+	if len(c.userList) > 0 {
+		err = safeCoreCall("add initial users", func() error {
+			added, err = c.server.AddUsers(&vCore.AddUsersParams{Tag: c.tag, Users: c.userList, NodeInfo: node})
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("add users error: %s", err)
+		}
 	}
 	log.WithField("tag", c.tag).Infof("Added %d new users", added)
 	c.info = node
@@ -104,7 +132,15 @@ func (c *Controller) Start() error {
 
 // Close implement the Close() function of the service interface
 func (c *Controller) Close() error {
-	limiter.DeleteLimiter(c.tag)
+	c.apiClient.CloseRequests()
+	c.monitorMu.Lock()
+	defer c.monitorMu.Unlock()
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
 	if c.nodeInfoMonitorPeriodic != nil {
 		c.nodeInfoMonitorPeriodic.Close()
 	}
@@ -120,7 +156,12 @@ func (c *Controller) Close() error {
 	if c.onlineIpReportPeriodic != nil {
 		c.onlineIpReportPeriodic.Close()
 	}
-	err := c.server.DelNode(c.tag)
+	var err error
+	if c.nodeAdded || c.info != nil {
+		err = safeCoreCall("delete closing node", func() error { return c.server.DelNode(c.tag) })
+	}
+	limiter.DeleteLimiter(c.tag)
+	c.nodeAdded = false
 	if err != nil {
 		return fmt.Errorf("del node error: %s", err)
 	}

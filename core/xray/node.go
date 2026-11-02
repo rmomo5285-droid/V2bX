@@ -17,7 +17,9 @@ type DNSConfig struct {
 }
 
 func (c *Xray) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) error {
+	c.users.mapLock.Lock()
 	c.nodeReportMinTrafficBytes[tag] = config.ReportMinTraffic * 1024
+	c.users.mapLock.Unlock()
 	err := updateDNSConfig(info)
 	if err != nil {
 		return fmt.Errorf("build dns error: %s", err)

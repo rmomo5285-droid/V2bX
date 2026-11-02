@@ -32,6 +32,7 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 	l, err := limiter.GetLimiter(m.Inbound)
 	if err != nil {
 		log.Warn("get limiter for ", m.Inbound, " error: ", err)
+		_ = conn.Close()
 		return conn
 	}
 	taguuid := format.UserTag(m.Inbound, m.User)
@@ -102,13 +103,7 @@ func (h *HookServer) RoutedConnection(_ context.Context, conn net.Conn, m adapte
 			return conn
 		}
 	}
-	var t *counter.TrafficCounter
-	if c, ok := h.counter.Load(m.Inbound); !ok {
-		t = counter.NewTrafficCounter()
-		h.counter.Store(m.Inbound, t)
-	} else {
-		t = c.(*counter.TrafficCounter)
-	}
+	t := counter.LoadOrCreate(&h.counter, m.Inbound)
 	conn = counter.NewConnCounter(trackConnection(conn, l, m), t.GetCounter(m.User))
 	return conn
 }
@@ -117,6 +112,7 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 	l, err := limiter.GetLimiter(m.Inbound)
 	if err != nil {
 		log.Warn("get limiter for ", m.Inbound, " error: ", err)
+		_ = conn.Close()
 		return conn
 	}
 	ip := m.Source.Addr.String()
@@ -187,13 +183,7 @@ func (h *HookServer) RoutedPacketConnection(_ context.Context, conn N.PacketConn
 			return conn
 		}
 	}
-	var t *counter.TrafficCounter
-	if c, ok := h.counter.Load(m.Inbound); !ok {
-		t = counter.NewTrafficCounter()
-		h.counter.Store(m.Inbound, t)
-	} else {
-		t = c.(*counter.TrafficCounter)
-	}
+	t := counter.LoadOrCreate(&h.counter, m.Inbound)
 	conn = counter.NewPacketConnCounter(trackPacketConnection(conn, l, m), t.GetCounter(m.User))
 	return conn
 }

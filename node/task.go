@@ -46,6 +46,15 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 }
 
 func (c *Controller) nodeInfoMonitor() (err error) {
+	// Replacing a periodic Task must not overlap two polling generations.
+	c.monitorMu.Lock()
+	defer c.monitorMu.Unlock()
+	c.stateMu.RLock()
+	closed := c.closed
+	c.stateMu.RUnlock()
+	if closed {
+		return nil
+	}
 	// get node info
 	newN, err := c.apiClient.GetNodeInfo()
 	if err != nil {
@@ -58,6 +67,9 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	// get user info
 	newU, err := c.apiClient.GetUserList()
 	if err != nil {
+		if newN != nil {
+			c.apiClient.InvalidateNodeCache()
+		}
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
@@ -71,10 +83,18 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			"tag": c.tag,
 			"err": err,
 		}).Error("Get alive list failed")
+		// Preserve the last alive snapshot, but still apply user revocations.
+		newA = nil
+	}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.closed {
 		return nil
 	}
 	if newN != nil {
 		if err = c.reloadNode(newN, newU, newA); err != nil {
+			c.apiClient.InvalidateNodeCache()
+			c.apiClient.InvalidateUserCache()
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
@@ -83,7 +103,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		return nil
 	}
 	// node no changed, check users
-	if len(newU) == 0 {
+	if newU == nil {
 		if newA != nil {
 			c.limiter.SetAliveList(newA)
 			c.aliveMap = cloneAliveMap(newA)
@@ -92,6 +112,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	}
 	deleted, added, err := c.applyUserUpdate(newU)
 	if err != nil {
+		c.apiClient.InvalidateUserCache()
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
@@ -128,6 +149,7 @@ func (c *Controller) reloadNode(newN *panel.NodeInfo, newU []panel.UserInfo, new
 	}
 
 	log.WithField("tag", c.tag).Info("Node changed, reload")
+	c.collectUserTraffic()
 	if err := safeCoreCall("delete current node", func() error {
 		return c.server.DelNode(c.tag)
 	}); err != nil {
@@ -218,6 +240,7 @@ func (c *Controller) applyUserUpdate(newUsers []panel.UserInfo) (deleted, added 
 	}
 
 	if len(deleted) > 0 {
+		c.collectUserTraffic()
 		if err := safeCoreCall("delete users", func() error {
 			return c.server.DelUsers(deleted, c.tag, c.info)
 		}); err != nil {
@@ -411,6 +434,11 @@ func cloneAliveMap(source map[int]int) map[int]int {
 }
 
 func (c *Controller) SpeedChecker() error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.closed {
+		return nil
+	}
 	for u, t := range c.traffic {
 		if t >= c.LimitConfig.DynamicSpeedLimitConfig.Traffic {
 			err := c.limiter.UpdateDynamicSpeedLimit(c.tag, u,

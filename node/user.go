@@ -5,27 +5,59 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (c *Controller) reportUserTrafficTask() (err error) {
-	userTraffic, _ := c.server.GetUserTrafficSlice(c.tag, true)
-	c.limiter.QualifyOnlineDevices(userTraffic)
-	if len(userTraffic) > 0 {
-		err = c.apiClient.ReportUserTraffic(userTraffic)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"tag": c.tag,
-				"err": err,
-			}).Info("Report user traffic failed")
+func (c *Controller) reportUserTrafficTask() error {
+	// Task replacement can leave an old callback finishing its HTTP request.
+	// Serialize counter resets, pending batches and acknowledgements.
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.closed {
+		return nil
+	}
+	c.trafficReportMu.Lock()
+	defer c.trafficReportMu.Unlock()
+	c.collectUserTraffic()
+	if len(c.pendingTraffic) > 0 {
+		batch := make([]panel.UserTraffic, 0, len(c.pendingTraffic))
+		for _, traffic := range c.pendingTraffic {
+			batch = append(batch, traffic)
+		}
+		if err := c.apiClient.ReportUserTraffic(batch); err != nil {
+			log.WithError(err).WithField("tag", c.tag).Info("Report user traffic failed")
 		} else {
-			log.WithField("tag", c.tag).Infof("Report %d users traffic", len(userTraffic))
-			log.WithField("tag", c.tag).Debugf("User traffic: %+v", userTraffic)
+			c.pendingTraffic = nil
+			log.WithField("tag", c.tag).Infof("Report %d users traffic", len(batch))
 		}
 	}
-
 	return nil
+}
+
+// Caller holds stateMu and, for shared readers, trafficReportMu. Capture before
+// user removal or inbound replacement so counters are retained in the retry batch.
+func (c *Controller) collectUserTraffic() {
+	userTraffic, readErr := c.server.GetUserTrafficSlice(c.tag, true)
+	if readErr != nil {
+		log.WithError(readErr).WithField("tag", c.tag).Warn("Read user traffic failed")
+	}
+	c.limiter.QualifyOnlineDevices(userTraffic)
+	for _, traffic := range userTraffic {
+		if c.pendingTraffic == nil {
+			c.pendingTraffic = make(map[int]panel.UserTraffic)
+		}
+		pending := c.pendingTraffic[traffic.UID]
+		pending.UID = traffic.UID
+		pending.Upload += traffic.Upload
+		pending.Download += traffic.Download
+		c.pendingTraffic[traffic.UID] = pending
+	}
 }
 
 // Online heartbeats are independent of the accounting push interval.
 func (c *Controller) reportOnlineUsersTask() error {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.closed {
+		return nil
+	}
 	c.onlineReportMu.Lock()
 	defer c.onlineReportMu.Unlock()
 	userTraffic, err := c.server.GetUserTrafficSlice(c.tag, false)

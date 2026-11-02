@@ -1,6 +1,7 @@
 package conf
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,7 +29,9 @@ func TestConf_Watch(t *testing.T) {
 	c := New()
 	reloaded := make(chan struct{})
 	var once sync.Once
-	if err := c.Watch(path, "", "", func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := c.WatchContext(ctx, path, "", "", func(_ *Conf) {
 		once.Do(func() { close(reloaded) })
 	}); err != nil {
 		t.Fatalf("watch config: %v", err)

@@ -44,7 +44,15 @@ type UserMap struct {
 	mapLock sync.RWMutex
 }
 
-func New(c *conf.CoreConfig) (vCore.Core, error) {
+func New(c *conf.CoreConfig) (result vCore.Core, err error) {
+	// Legacy config builders panic on invalid local settings. Return an error
+	// so a bad hot reload can preserve the running configuration.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = nil
+			err = fmt.Errorf("build Xray core: %v", recovered)
+		}
+	}()
 	return &Xray{
 		Server: getCore(c.XrayConfig),
 		users: &UserMap{

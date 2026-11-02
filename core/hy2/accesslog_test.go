@@ -67,3 +67,19 @@ func TestSessionIdentityPreservesUserAccounting(t *testing.T) {
 		t.Fatal("per-session identities split user accounting")
 	}
 }
+
+func TestRevokedUserTerminatesAuthenticatedTraffic(t *testing.T) {
+	limiter.Init()
+	user := panel.UserInfo{Id: 42, Uuid: "revoked"}
+	l := limiter.AddLimiter("revocation", &conf.LimitConfig{}, []panel.UserInfo{user}, nil)
+	defer limiter.DeleteLimiter("revocation")
+	hook := &HookServer{Tag: "revocation", logger: zap.NewNop()}
+	session := newAuthID(user.Uuid)
+	if !hook.LogTraffic(session, 1, 2) {
+		t.Fatal("valid user rejected")
+	}
+	l.UpdateUser("revocation", nil, []panel.UserInfo{user})
+	if hook.LogTraffic(session, 1, 2) {
+		t.Fatal("revoked QUIC session was allowed to continue")
+	}
+}

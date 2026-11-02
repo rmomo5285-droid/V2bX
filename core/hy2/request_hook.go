@@ -18,6 +18,10 @@ import (
 
 var errAbuseGuardRejected = errors.New("destination rejected by abuse guard")
 
+// Keep the QUIC/TLS parser's input strictly bounded per sniff operation. This
+// also limits memory amplification in third-party sniffers on malformed UDP.
+const maxUDPSniffBytes = 64 * 1024
+
 type hy2StreamUsers struct {
 	users sync.Map
 }
@@ -109,21 +113,35 @@ func (h *policyRequestHook) TCP(stream server.HyStream, reqAddr *string) ([]byte
 	return putback, nil
 }
 
-func (h *policyRequestHook) UDP(data []byte, reqAddr *string) error {
+func (h *policyRequestHook) UDP(packets [][]byte, reqAddr *string) (bool, error) {
+	total := 0
+	for _, packet := range packets {
+		if len(packet) > maxUDPSniffBytes-total {
+			return true, fmt.Errorf("UDP sniff input exceeds %d bytes", maxUDPSniffBytes)
+		}
+		total += len(packet)
+	}
 	limit, err := limiter.GetLimiter(h.tag)
 	if err != nil {
-		return fmt.Errorf("get limiter for %s: %w", h.tag, err)
+		return true, fmt.Errorf("get limiter for %s: %w", h.tag, err)
 	}
+	done := true
 	if h.delegate != nil && h.delegate.Check(true, *reqAddr) {
-		if err := h.delegate.UDP(data, reqAddr); err != nil {
-			return err
+		if done, err = h.delegate.UDP(packets, reqAddr); err != nil {
+			return true, err
 		}
 	} else if limit.HasDomainRules() && h.autoSniff.Check(true, *reqAddr) {
-		if err := h.autoSniff.UDP(data, reqAddr); err != nil {
-			return err
+		if done, err = h.autoSniff.UDP(packets, reqAddr); err != nil {
+			return true, err
 		}
 	}
-	return h.enforcePanelRules(limit, "", "udp", *reqAddr, data)
+	// Check every held datagram; protocol rules must not miss later packets.
+	for _, data := range packets {
+		if err := h.enforcePanelRules(limit, "", "udp", *reqAddr, data); err != nil {
+			return true, err
+		}
+	}
+	return done, nil
 }
 
 func (h *policyRequestHook) runTCPDelegate(stream server.HyStream, reqAddr *string, limit *limiter.Limiter) ([]byte, error) {

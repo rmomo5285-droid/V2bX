@@ -13,9 +13,17 @@ import (
 )
 
 type outboundStub struct {
-	tcpCalls []string
-	udpCalls []string
-	udpConn  *udpConnStub
+	tcpCalls  []string
+	udpCalls  []string
+	udpConn   *udpConnStub
+	udpDenied string
+}
+
+func (o *outboundStub) CheckUDP(reqAddr string) error {
+	if reqAddr == o.udpDenied {
+		return errSafetyRuleRejected
+	}
+	return nil
 }
 
 func (o *outboundStub) TCP(reqAddr string) (net.Conn, error) {
@@ -47,6 +55,25 @@ func (c *udpConnStub) WriteTo(b []byte, addr string) (int, error) {
 }
 
 func (c *udpConnStub) Close() error { return nil }
+
+func TestPanelRuleUDPConnChecksWrappedACLWhenTargetChanges(t *testing.T) {
+	o, stub := newPanelRuleOutboundForTest(t, panel.Rules{})
+	stub.udpDenied = "denied.example:443"
+	conn, err := o.UDP("allowed.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.WriteTo([]byte("ok"), "allowed.example:443"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.WriteTo([]byte("blocked"), stub.udpDenied); !errors.Is(err, errSafetyRuleRejected) {
+		t.Fatalf("changed target bypassed wrapped ACL: %v", err)
+	}
+	if len(stub.udpConn.writes) != 1 {
+		t.Fatalf("blocked packet reached underlying socket: %v", stub.udpConn.writes)
+	}
+}
 
 func newPanelRuleOutboundForTest(t *testing.T, rules panel.Rules) (*panelRuleOutbound, *outboundStub) {
 	t.Helper()

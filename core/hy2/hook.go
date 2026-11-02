@@ -34,8 +34,6 @@ func (h *HookServer) UntraceStream(stream server.HyStream) {
 
 func (h *HookServer) LogTraffic(id string, tx, rx uint64) (ok bool) {
 	id = authUser(id)
-	var c interface{}
-	var exists bool
 
 	limiterinfo, err := limiter.GetLimiter(h.Tag)
 	if err != nil {
@@ -44,7 +42,10 @@ func (h *HookServer) LogTraffic(id string, tx, rx uint64) (ok bool) {
 	}
 
 	userLimit, ok := limiterinfo.UserLimitInfo.Load(format.UserTag(h.Tag, id))
-	if ok {
+	if !ok {
+		return false
+	}
+	{
 		userlimitInfo := userLimit.(*limiter.UserLimitInfo)
 		if userlimitInfo.OverLimit.Swap(false) {
 			return false
@@ -54,18 +55,15 @@ func (h *HookServer) LogTraffic(id string, tx, rx uint64) (ok bool) {
 		return false
 	}
 
-	if c, exists = h.Counter.Load(h.Tag); !exists {
-		c = counter.NewTrafficCounter()
-		h.Counter.Store(h.Tag, c)
-	}
+	c := counter.LoadOrCreate(&h.Counter, h.Tag)
 
-	if tc, ok := c.(*counter.TrafficCounter); ok {
+	{
+		tc := c
 		tc.Rx(id, int(rx))
 		tc.Tx(id, int(tx))
 		return true
 	}
 
-	return false
 }
 
 func (s *HookServer) LogOnlineState(id string, online bool) {

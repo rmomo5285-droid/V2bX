@@ -238,13 +238,16 @@ func appendBlockRules(rules *Rules, matches []string) error {
 }
 
 func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
-	const path = "/api/v1/server/UniProxy/config"
+	path := c.apiPath("config")
 	r, err := c.client.
 		R().
 		SetHeader("If-None-Match", c.nodeEtag).
 		ForceContentType("application/json").
 		Get(path)
 
+	if err = c.checkResponse(r, path, err); err != nil {
+		return nil, err
+	}
 	if r.StatusCode() == 304 {
 		return nil, nil
 	}
@@ -252,11 +255,6 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	newBodyHash := hex.EncodeToString(hash[:])
 	if c.responseBodyHash == newBodyHash {
 		return nil, nil
-	}
-	c.responseBodyHash = newBodyHash
-	c.nodeEtag = r.Header().Get("ETag")
-	if err = c.checkResponse(r, path, err); err != nil {
-		return nil, err
 	}
 
 	if r != nil {
@@ -401,6 +399,9 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	// clear
 	cm.Routes = nil
 	cm.BaseConfig = nil
+	// Commit cache validators only after the entire response is valid.
+	c.responseBodyHash = newBodyHash
+	c.nodeEtag = r.Header().Get("ETag")
 
 	return node, nil
 }
@@ -426,7 +427,7 @@ func intervalToTime(value interface{}) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("unsupported interval type %T", value)
 	}
-	if seconds <= 0 {
+	if seconds <= 0 || seconds > int64((1<<63-1)/time.Second) {
 		return 0, fmt.Errorf("interval must be positive, got %d", seconds)
 	}
 	return time.Duration(seconds) * time.Second, nil

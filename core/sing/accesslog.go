@@ -19,11 +19,16 @@ type onlineConn struct {
 
 func (c *onlineConn) Close() error { defer c.device.Close(); return c.ExtendedConn.Close() }
 
+// Preserve the protocol writer's headroom and buffer metadata through tracking.
+func (c *onlineConn) Upstream() any { return c.ExtendedConn }
+
 type onlinePacketConn struct {
 	N.PacketConn
 	device *limiter.DeviceLease
 	once   sync.Once
 }
+
+func (c *onlinePacketConn) Upstream() any { return c.PacketConn }
 
 func (c *onlinePacketConn) Close() error {
 	defer c.once.Do(c.device.Close)

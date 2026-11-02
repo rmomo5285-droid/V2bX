@@ -14,6 +14,24 @@ type TrafficStorage struct {
 	DownCounter atomic.Int64
 }
 
+// Read drains each direction atomically. Bytes arriving during a drain remain
+// in this batch or the next one; a load followed by Store(0) would lose them.
+func (s *TrafficStorage) Read(reset bool) (up, down int64) {
+	if reset {
+		return s.UpCounter.Swap(0), s.DownCounter.Swap(0)
+	}
+	return s.UpCounter.Load(), s.DownCounter.Load()
+}
+
+// LoadOrCreate shares one counter even when the first connections arrive together.
+func LoadOrCreate(counters *sync.Map, tag string) *TrafficCounter {
+	if c, ok := counters.Load(tag); ok {
+		return c.(*TrafficCounter)
+	}
+	c, _ := counters.LoadOrStore(tag, NewTrafficCounter())
+	return c.(*TrafficCounter)
+}
+
 func NewTrafficCounter() *TrafficCounter {
 	return &TrafficCounter{}
 }

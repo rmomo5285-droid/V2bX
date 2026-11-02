@@ -70,8 +70,7 @@ func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 			down := traffic.DownCounter.Load()
 			if up+down > x.nodeReportMinTrafficBytes[tag] {
 				if reset {
-					traffic.UpCounter.Store(0)
-					traffic.DownCounter.Store(0)
+					up, down = traffic.Read(true)
 				}
 				if x.users.uidMap[email] == 0 {
 					c.Delete(email)
@@ -94,6 +93,17 @@ func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 }
 
 func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
+	if p.NodeInfo.Type == "shadowsocks" && p.Shadowsocks.ServerKey != "" {
+		keyLength := 32
+		if p.Shadowsocks.Cipher == "2022-blake3-aes-128-gcm" {
+			keyLength = 16
+		}
+		for _, user := range p.Users {
+			if len(user.Uuid) < keyLength {
+				return 0, fmt.Errorf("SS2022 password must contain at least %d bytes", keyLength)
+			}
+		}
+	}
 	c.users.mapLock.Lock()
 	defer c.users.mapLock.Unlock()
 	for i := range p.Users {

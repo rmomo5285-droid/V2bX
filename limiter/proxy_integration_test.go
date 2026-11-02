@@ -1,0 +1,172 @@
+//go:build sing && xray && hysteria2
+
+package limiter_test
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/InazumaV/V2bX/api/panel"
+	"github.com/InazumaV/V2bX/conf"
+	"github.com/InazumaV/V2bX/core"
+	_ "github.com/InazumaV/V2bX/core/imports"
+	"github.com/InazumaV/V2bX/limiter"
+	"github.com/InazumaV/V2bX/node"
+	hyclient "github.com/apernet/hysteria/core/v2/client"
+)
+
+// Exercise the actual listeners, authentication, forwarding and byte counters
+// through a local Xboard HTTP fixture. This makes no external network requests.
+func TestThreeCoreProxyForwarding(t *testing.T) {
+	limiter.Init()
+	restore := limiter.AllowLoopbackForTest()
+	defer restore()
+	echo, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); io.Copy(c, c) }()
+		}
+	}()
+	for _, kind := range []string{"xray", "sing", "hysteria2"} {
+		t.Run(kind, func(t *testing.T) {
+			proto := "vless"
+			if kind == "hysteria2" {
+				proto = kind
+			}
+			reserve, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port := reserve.Addr().(*net.TCPAddr).Port
+			reserve.Close()
+			const uuid = "00112233-4455-6677-8899-aabbccddeeff"
+			apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/config"):
+					fmt.Fprintf(w, `{"server_port":%d,"network":"tcp","tls":0,"base_config":{"pull_interval":3600,"push_interval":3600}}`, port)
+				case strings.HasSuffix(r.URL.Path, "/user"):
+					fmt.Fprintf(w, `{"users":[{"id":7,"uuid":%q}]}`, uuid)
+				case strings.HasSuffix(r.URL.Path, "/alivelist"):
+					fmt.Fprint(w, `{"alive":{}}`)
+				default:
+					fmt.Fprint(w, `{"data":true}`)
+				}
+			}))
+			defer apiServer.Close()
+			cfg := conf.CoreConfig{Type: kind, XrayConfig: conf.NewXrayConfig(), SingConfig: conf.NewSingConfig(), Hysteria2Config: conf.NewHysteria2Config()}
+			// The updated Xray fork also blocks loopback in freedom by default.
+			// Scope its explicit exception to this test's local outbound file.
+			if kind == "xray" {
+				cfg.XrayConfig.OutboundConfigPath = filepath.Join(t.TempDir(), "outbound.json")
+				if err := os.WriteFile(cfg.XrayConfig.OutboundConfigPath, []byte(`[{"protocol":"freedom","tag":"test-loopback","settings":{"finalRules":[{"action":"allow","ip":["127.0.0.1/32"]}]}}]`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			backend, err := core.NewCore([]conf.CoreConfig{cfg})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer backend.Close()
+			if err := backend.Start(); err != nil {
+				t.Fatal(err)
+			}
+			api, err := panel.New(&conf.ApiConfig{APIHost: apiServer.URL, NodeID: 1, NodeType: proto})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cert := conf.NewCertConfig()
+			if kind == "hysteria2" {
+				cert.CertMode = "self"
+				cert.CertDomain = "localhost"
+				cert.CertFile = filepath.Join(t.TempDir(), "cert.pem")
+				cert.KeyFile = filepath.Join(t.TempDir(), "key.pem")
+			}
+			tag := "smoke-" + kind
+			controller := node.NewController(backend, api, &conf.Options{Name: tag, ListenIP: "127.0.0.1", SendIP: "0.0.0.0", Core: kind, XrayOptions: &conf.XrayOptions{DisableSniffing: true}, SingOptions: &conf.SingOptions{}, CertConfig: cert})
+			if err := controller.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer controller.Close()
+			var connection net.Conn
+			if kind == "hysteria2" {
+				client, _, err := hyclient.NewClient(&hyclient.Config{ServerAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: port}, Auth: uuid, TLSConfig: hyclient.TLSConfig{ServerName: "localhost", InsecureSkipVerify: true}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer client.Close()
+				connection, err = client.TCP(echo.Addr().String())
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				connection, err = net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				connection.SetDeadline(time.Now().Add(5 * time.Second))
+				id := []byte{0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+				header := append([]byte{0}, id...)
+				header = append(header, 0, 1)
+				header = binary.BigEndian.AppendUint16(header, uint16(echo.Addr().(*net.TCPAddr).Port))
+				header = append(header, 1, 127, 0, 0, 1)
+				if _, err := connection.Write(header); err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer connection.Close()
+			connection.SetDeadline(time.Now().Add(5 * time.Second))
+			payload := bytes.Repeat([]byte("V2bX-loopback-test"), 100)
+			if _, err := connection.Write(payload); err != nil {
+				t.Fatal(err)
+			}
+			if kind != "hysteria2" {
+				response := make([]byte, 2)
+				if _, err := io.ReadFull(connection, response); err != nil {
+					t.Fatal(err)
+				}
+				if response[0] != 0 || response[1] != 0 {
+					t.Fatalf("invalid VLESS response %v", response)
+				}
+			}
+			reply := make([]byte, len(payload))
+			if _, err := io.ReadFull(connection, reply); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(payload, reply) {
+				t.Fatal("forwarded data corrupted")
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				rows, err := backend.GetUserTrafficSlice(tag, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(rows) == 1 && rows[0].UID == 7 && rows[0].Upload >= int64(len(payload)) && rows[0].Download >= int64(len(payload)) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("missing traffic accounting: %+v", rows)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+	}
+}

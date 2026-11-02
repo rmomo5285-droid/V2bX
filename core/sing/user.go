@@ -6,6 +6,7 @@ import (
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/counter"
+	"github.com/InazumaV/V2bX/common/format"
 	"github.com/InazumaV/V2bX/core"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/anytls"
@@ -26,7 +27,7 @@ func (b *Sing) AddUsers(p *core.AddUsersParams) (added int, err error) {
 	b.users.mapLock.Lock()
 	defer b.users.mapLock.Unlock()
 	for i := range p.Users {
-		b.users.uidMap[p.Users[i].Uuid] = p.Users[i].Id
+		b.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
 	}
 	switch p.NodeInfo.Type {
 	case "vless":
@@ -54,8 +55,14 @@ func (b *Sing) AddUsers(p *core.AddUsersParams) (added int, err error) {
 			var password = p.Users[i].Uuid
 			switch p.Shadowsocks.Cipher {
 			case "2022-blake3-aes-128-gcm":
+				if len(password) < 16 {
+					return 0, errors.New("SS2022 password must contain at least 16 bytes")
+				}
 				password = base64.StdEncoding.EncodeToString([]byte(password[:16]))
 			case "2022-blake3-aes-256-gcm":
+				if len(password) < 32 {
+					return 0, errors.New("SS2022 password must contain at least 32 bytes")
+				}
 				password = base64.StdEncoding.EncodeToString([]byte(password[:32]))
 			}
 			us[i] = option.ShadowsocksUser{
@@ -124,10 +131,8 @@ func (b *Sing) AddUsers(p *core.AddUsersParams) (added int, err error) {
 func (b *Sing) GetUserTraffic(tag, uuid string, reset bool) (up int64, down int64) {
 	if v, ok := b.hookServer.counter.Load(tag); ok {
 		c := v.(*counter.TrafficCounter)
-		up = c.GetUpCount(uuid)
-		down = c.GetDownCount(uuid)
-		if reset {
-			c.Reset(uuid)
+		if v, ok := c.Counters.Load(uuid); ok {
+			up, down = v.(*counter.TrafficStorage).Read(reset)
 		}
 		return
 	}
@@ -148,15 +153,14 @@ func (b *Sing) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 			down := traffic.DownCounter.Load()
 			if up+down > b.nodeReportMinTrafficBytes[tag] {
 				if reset {
-					traffic.UpCounter.Store(0)
-					traffic.DownCounter.Store(0)
+					up, down = traffic.Read(true)
 				}
-				if b.users.uidMap[uuid] == 0 {
+				if b.users.uidMap[format.UserTag(tag, uuid)] == 0 {
 					c.Delete(uuid)
 					return true
 				}
 				trafficSlice = append(trafficSlice, panel.UserTraffic{
-					UID:      b.users.uidMap[uuid],
+					UID:      b.users.uidMap[format.UserTag(tag, uuid)],
 					Upload:   up,
 					Download: down,
 				})
@@ -207,7 +211,7 @@ func (b *Sing) DelUsers(users []panel.UserInfo, tag string, info *panel.NodeInfo
 			c := v.(*counter.TrafficCounter)
 			c.Delete(users[i].Uuid)
 		}
-		delete(b.users.uidMap, users[i].Uuid)
+		delete(b.users.uidMap, format.UserTag(tag, users[i].Uuid))
 		uuids[i] = users[i].Uuid
 	}
 	err := del.DelUsers(uuids)

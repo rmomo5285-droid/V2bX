@@ -31,6 +31,8 @@ type ApiConfig struct {
 	NodeType     string `json:"NodeType"`
 	Timeout      int    `json:"Timeout"`
 	RuleListPath string `json:"RuleListPath"`
+	APIProtocol  string `json:"ApiProtocol"` // uniproxy (default) or xboard-v2
+	MachineID    int    `json:"MachineID"`   // Xboard v2 machine token; static NodeID
 }
 
 func (n *NodeConfig) UnmarshalJSON(data []byte) (err error) {

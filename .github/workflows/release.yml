@@ -126,7 +126,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.25.0'
+          go-version-file: go.mod
 
       - name: Get project dependencies
         run: |
@@ -148,13 +148,13 @@ jobs:
         run: |
           echo "version: $version"
           mkdir -p build_assets
-          GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
+          GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX -tags "http2legacy sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
 
       - name: Build Mips softfloat V2bX
         if: matrix.goarch == 'mips' || matrix.goarch == 'mipsle'
         run: |
           echo "version: $version"
-          GOEXPERIMENT=jsonv2 GOMIPS=softfloat go build -v -o build_assets/V2bX_softfloat -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
+          GOEXPERIMENT=jsonv2 GOMIPS=softfloat go build -v -o build_assets/V2bX_softfloat -tags "http2legacy sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
       - name: Rename Windows V2bX
         if: matrix.goos == 'windows'
         run: |
@@ -164,6 +164,13 @@ jobs:
         run: |
           cp ${GITHUB_WORKSPACE}/README.md ./build_assets/README.md
           cp ${GITHUB_WORKSPACE}/LICENSE ./build_assets/LICENSE
+          mkdir -p ./build_assets/third_party_licenses
+          cp ${GITHUB_WORKSPACE}/third_party/README.md ./build_assets/third_party_licenses/README.md
+          cp ${GITHUB_WORKSPACE}/third_party/sing-box/LICENSE ./build_assets/third_party_licenses/sing-box-LICENSE
+          cp ${GITHUB_WORKSPACE}/third_party/quic-go/LICENSE ./build_assets/third_party_licenses/quic-go-LICENSE
+          cp ${GITHUB_WORKSPACE}/docs/security-mptcp.md ./build_assets/SECURITY-MPTCP.md
+          cp ${GITHUB_WORKSPACE}/docs/upstream-integration.md ./build_assets/UPSTREAM-INTEGRATION.md
+          cp ${GITHUB_WORKSPACE}/scripts/mitigate-mptcp.sh ./build_assets/mitigate-mptcp.sh
           cp ${GITHUB_WORKSPACE}/docs/accesslog.md ./build_assets/ACCESSLOG.md
           cp ${GITHUB_WORKSPACE}/scripts/upgrade-accesslog.sh ./build_assets/upgrade-accesslog.sh
           cp ${GITHUB_WORKSPACE}/example/*.json ./build_assets/

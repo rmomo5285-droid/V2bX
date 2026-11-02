@@ -15,9 +15,23 @@ type Selector struct {
 	nodes sync.Map
 }
 
-func NewSelector(c []conf.CoreConfig) (Core, error) {
+func NewSelector(c []conf.CoreConfig) (result Core, err error) {
 	cs := make(map[string]Core, len(c))
+	defer func() {
+		if err != nil {
+			for _, instance := range cs {
+				_ = instance.Close()
+			}
+		}
+	}()
 	for _, t := range c {
+		name := t.Name
+		if name == "" {
+			name = t.Type
+		}
+		if _, exists := cs[name]; exists {
+			return nil, fmt.Errorf("duplicate core name %q", name)
+		}
 		f, ok := cores[strings.ToLower(t.Type)]
 		if !ok {
 			return nil, errors.New("unknown core type: " + t.Type)
