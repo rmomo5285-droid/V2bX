@@ -162,7 +162,7 @@ func startProxyFixture(t *testing.T, kind, target string) *proxyFixture {
 
 func (f *proxyFixture) dial() (net.Conn, error) {
 	if f.kind == "hysteria2" {
-		client, _, err := hyclient.NewClient(&hyclient.Config{ServerAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: f.port}, Auth: f.uuid, TLSConfig: hyclient.TLSConfig{ServerName: "localhost", InsecureSkipVerify: true}})
+		client, err := f.newHysteriaClient()
 		if err != nil {
 			return nil, err
 		}
@@ -198,6 +198,11 @@ func (f *proxyFixture) dial() (net.Conn, error) {
 		return nil, err
 	}
 	return &vlessTestConn{Conn: conn}, nil
+}
+
+func (f *proxyFixture) newHysteriaClient() (hyclient.Client, error) {
+	client, _, err := hyclient.NewClient(&hyclient.Config{ServerAddr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: f.port}, Auth: f.uuid, TLSConfig: hyclient.TLSConfig{ServerName: "localhost", InsecureSkipVerify: true}})
+	return client, err
 }
 
 type hyTestConn struct {

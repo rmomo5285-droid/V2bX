@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/InazumaV/V2bX/limiter"
+	hyclient "github.com/apernet/hysteria/core/v2/client"
 )
 
 // An opt-in, bounded localhost workload. All processes, client traffic, echo
@@ -31,6 +32,8 @@ type stressResult struct {
 	PayloadBytes              int              `json:"payload_bytes"`
 	ChurnRateLimit            int              `json:"churn_rate_limit_per_second"`
 	ChurnPacing               string           `json:"churn_pacing,omitempty"`
+	SessionMode               string           `json:"session_mode"`
+	SuccessfulQUICSessions    uint64           `json:"successful_quic_sessions"`
 	ElapsedSeconds            float64          `json:"elapsed_seconds"`
 	SuccessfulExchanges       uint64           `json:"successful_exchanges"`
 	SuccessfulConnections     uint64           `json:"successful_connections"`
@@ -225,6 +228,11 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 	r := stressResult{Core: f.kind, Mode: mode, Concurrency: concurrency, PayloadBytes: size, HeapBeforeBytes: before.HeapAlloc, PeakHeapBytes: before.HeapAlloc, GoroutinesBefore: runtime.NumGoroutine()}
+	r.SessionMode = "new-transport-per-connection"
+	reuseQUIC := f.kind == "hysteria2" && mode == "churn" && os.Getenv("V2BX_STRESS_FRESH_QUIC") != "1"
+	if reuseQUIC {
+		r.SessionMode = "one-quic-session-per-worker"
+	}
 	r.PeakGoroutines = r.GoroutinesBefore
 	r.MemorySnapshots = append(r.MemorySnapshots, snapshotMemory(f, "baseline_after_gc"))
 	if mode == "churn" {
@@ -236,6 +244,7 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 	}
 	var histogram [50001]atomic.Uint64
 	var successes, connections, failures atomic.Uint64
+	var quicSessions atomic.Uint64
 	var errorsMu sync.Mutex
 	var firstErrors []string
 	recordError := func(err error) {
@@ -305,9 +314,13 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 			payload := bytes.Repeat([]byte{byte(worker + 1)}, size)
 			reply := make([]byte, size)
 			var connection net.Conn
+			var session hyclient.Client
 			defer func() {
 				if connection != nil {
 					connection.Close()
+				}
+				if session != nil {
+					session.Close()
 				}
 			}()
 			<-startGate
@@ -325,7 +338,22 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 				operationStart := time.Now()
 				if connection == nil {
 					var err error
-					connection, err = f.dial()
+					if reuseQUIC {
+						if session == nil {
+							session, err = f.newHysteriaClient()
+							if err != nil {
+								recordError(err)
+								return
+							}
+							quicSessions.Add(1)
+						}
+						connection, err = session.TCP(f.target)
+					} else {
+						connection, err = f.dial()
+						if err == nil && f.kind == "hysteria2" {
+							quicSessions.Add(1)
+						}
+					}
 					if err != nil {
 						recordError(err)
 						return
@@ -383,6 +411,7 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 	<-sampleDone
 	r.SuccessfulExchanges = successes.Load()
 	r.SuccessfulConnections = connections.Load()
+	r.SuccessfulQUICSessions = quicSessions.Load()
 	r.Failures = failures.Load()
 	r.FirstErrors = firstErrors
 	r.ExpectedBytesPerDirection = int64(r.SuccessfulExchanges) * int64(size)

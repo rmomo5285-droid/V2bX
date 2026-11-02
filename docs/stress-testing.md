@@ -70,6 +70,17 @@ JSON 的 `churn_pacing` 为 `global-ticker`；时钟延迟时不会补发积压�
 持久连接模式仍从同一闸门同时发起全部连接。任何连接失败继续使测试失败，未添加重试。
 Linux CI 还会在同一节点连续执行五轮 128 并发的默认短连接稳定性测试。
 
+`.2` 的五轮 Linux 测试仍出现 11/2/6/5/4 次失败，说明共享时钟本身不能
+解决每秒重建大量完整 QUIC 会话的容量问题；其中一轮计费一致性检查也失败。
+`.2` 未发布，原始结果保留于 run 41483389723 的工件。
+从 `.3` 起，Hysteria2 的常规 churn 每个客户端复用一个 QUIC 会话，反复建立/关闭 TCP 流；
+`session_mode=one-quic-session-per-worker`，`successful_quic_sessions` 单独记录会话数量。
+该模式测试协议内复用，不能再把 successful_connections 解释为 QUIC 握手次数。
+Xray/sing 的 TCP churn 不变；持久模式仍同步建立 128 个独立 QUIC 会话。
+设置 `V2BX_STRESS_FRESH_QUIC=1` 可使用原来的每流新建 QUIC 会话；
+再设置 `V2BX_STRESS_BURST_CHURN=1` 可恢复原周期握手突发。容量失败并未修复或掩盖，
+生产队列和重试策略未改变。
+
 请求错误、内容错误、计费字节不一致、自然空闲后仍有在线设备、最后关闭后 6 秒内 goroutine 未回到基线，均使测试失败。
 延迟采用 0.1 ms 直方图，输出分位数是桶上界。客户端和服务端共享 CPU；
 Windows 回环吞吐不能代表 VPS 带宽、Linux 网络栈或不同协议的公平性能排名。
