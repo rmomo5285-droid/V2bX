@@ -19,7 +19,10 @@
 
 Windows 全发布标签单元测试和 go vet 已运行。三个核心实际本地监听通过 VLESS / 原生 Hysteria2 将数据转发到 TCP echo，核对返回内容和双向计费。测试只为回环地址增加测试文件内的例外，生产私网阻断保持启用；Xray 使用仅测试的 freedom 出站规则。覆盖范围不等于所有协议、所有客户端配置和真实面板端到端验收。
 
-Linux 全测试、race、真实 TCP socket 协议检查、QUIC trailer 回归和升级/回滚脚本模拟测试将由隔离验证分支的 GitHub Actions 执行；通过后才推进默认分支。具体提交和 run 链接在交付记录中列明。
+Linux 全测试、race、真实 TCP socket 协议检查、QUIC trailer 回归、32/128 并发、三个核心各 180 秒自然内存观察及升级/回滚脚本模拟测试均已通过。
+验收应用源码为 `f682dcb6d68d60cacb9f6067bcc63c0643c731a5`，
+[Actions run 41473791934](https://github.com/rmomo5285-droid/V2bX/actions/runs/41473791934)。
+原始数据与 RSS/堆内存结果见 `validation-linux-20261102.md`。随后文档与发布工作流的调整不改动应用源码；版本标签发布仍重新执行该标签源码的完整验证。
 
 ## 保留边界
 
@@ -27,6 +30,6 @@ Linux 全测试、race、真实 TCP socket 协议检查、QUIC trailer 回归和
 
 GO-2026-5288（Hysteria OOM）及 GO-2026-5932（OpenPGP 状态）保留在安全报告中，未以扫描工具证明没有漏洞。MPTCP 默认关闭仅缓解公开利用路径，Linux CVE-2026-98432 仍须厂商内核修复并重启；显式开启 MPTCP 的配置会覆盖 Go 默认值。
 
-尚未验证 Docker 构建、全部发布架构的运行、真实生产面板和线上负载；未发布 tag/Release，未连接或改动用户服务器。默认分支源码推送也不等于服务器已升级。
+尚未验证 Docker 构建、全部发布架构的运行、真实生产面板和线上负载；未连接或改动用户服务器。发布状态以 GitHub Release 为准，默认分支源码推送和发布均不等于服务器已升级。
 
 参考：[Go 官方 MPTCP 说明](https://github.com/golang/go/issues/82717)、[Go 1.27.3 正式版本](https://go.dev/doc/devel/release#go1.27.3)、[Ubuntu CVE 追踪](https://ubuntu.com/security/CVE-2026-98432)。

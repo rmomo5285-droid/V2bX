@@ -10,14 +10,6 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - master
-      - dev_new
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/release.yml"
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
@@ -257,7 +249,7 @@ jobs:
           notes="docs/releases/$RELEASE_TAG.md"
           test -f "$notes"
           # The helper is version-pinned; a new release requires reviewing it.
-          grep -qx "release='$RELEASE_TAG'" scripts/update-security.sh
+          grep -Fqx "release='$RELEASE_TAG'" scripts/update-security.sh
           cp scripts/{upgrade-security,update-security}.sh release-assets/
           (cd release-assets && sha256sum upgrade-security.sh > upgrade-security.sh.sha256)
           (cd release-assets && sha256sum update-security.sh > update-security.sh.sha256)
