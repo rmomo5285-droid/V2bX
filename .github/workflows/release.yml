@@ -25,8 +25,6 @@ on:
       - "go.mod"
       - "go.sum"
       - ".github/workflows/release.yml"
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -35,6 +33,8 @@ jobs:
 
   validation:
     uses: ./.github/workflows/ci.yml
+    with:
+      source_ref: ${{ inputs.release_tag || github.sha }}
 
   build:
     needs: validation
@@ -110,12 +110,12 @@ jobs:
       GOARCH: ${{ matrix.goarch }}
       GOARM: ${{ matrix.goarm }}
       CGO_ENABLED: 0
-      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name || github.ref_name }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.release_tag || github.ref }}
+          ref: ${{ needs.validation.outputs.source_sha }}
       - name: Show workflow information
         id: get_filename
         run: |
@@ -132,7 +132,7 @@ jobs:
         run: |
           go mod download
       - name: Get release version
-        if: ${{ github.event_name == 'release' || inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/') }}
         run: |
           tag="$RELEASE_TAG"
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
@@ -141,7 +141,7 @@ jobs:
           fi
           echo "version=$tag" >> "$GITHUB_ENV"
       - name: Get other version
-        if: ${{ github.event_name != 'release' && inputs.release_tag == '' && !startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ inputs.release_tag == '' && !startsWith(github.ref, 'refs/tags/') }}
         run: |
           echo "version=${{ github.sha }}" >> $GITHUB_ENV
       - name: Build V2bX
@@ -180,7 +180,7 @@ jobs:
             DOWNLOAD_URL="https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/${i}.dat"
             FILE_NAME="${i}.dat"
             echo -e "Downloading ${DOWNLOAD_URL}..."
-            curl -L "${DOWNLOAD_URL}" -o ./build_assets/${FILE_NAME}
+            curl --fail --location --retry 3 "${DOWNLOAD_URL}" -o ./build_assets/${FILE_NAME}
           done
       - name: Create ZIP archive
         shell: bash
@@ -219,15 +219,19 @@ jobs:
           retention-days: 7
 
   release-upload:
-    if: github.event_name == 'release' || inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/')
-    needs: build
+    if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/')
+    needs: [validation, build]
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ inputs.release_tag || github.ref_name }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.release_tag || github.ref }}
+          ref: ${{ needs.validation.outputs.source_sha }}
+          fetch-depth: 0
       - name: Download verified release bundles
         uses: actions/download-artifact@v8
         with:
@@ -237,8 +241,8 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name || github.ref_name }}
-          CREATE_RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          VALIDATED_SHA: ${{ needs.validation.outputs.source_sha }}
         shell: bash
         run: |
           shopt -s nullglob
@@ -248,20 +252,29 @@ jobs:
             exit 1
           fi
           (cd release-assets && sha256sum -c ./*.sha256)
-          if [[ "$CREATE_RELEASE" == true ]]; then
-            [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
-            notes="docs/releases/$RELEASE_TAG.md"
-            test -f "$notes"
-            if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release create "$RELEASE_TAG" --verify-tag --latest=false \
-                --title "V2bX $RELEASE_TAG" --notes-file "$notes" --repo "$GITHUB_REPOSITORY"
-            fi
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+          [[ $(git rev-parse "$RELEASE_TAG^{commit}") == "$VALIDATED_SHA" ]]
+          notes="docs/releases/$RELEASE_TAG.md"
+          test -f "$notes"
+          # The helper is version-pinned; a new release requires reviewing it.
+          grep -qx "release='$RELEASE_TAG'" scripts/update-security.sh
+          cp scripts/{upgrade-security,update-security}.sh release-assets/
+          (cd release-assets && sha256sum upgrade-security.sh > upgrade-security.sh.sha256)
+          (cd release-assets && sha256sum update-security.sh > update-security.sh.sha256)
+          (cd release-assets && sha256sum ./*.zip* ./*.sh ./*.sh.sha256 > SHA256SUMS)
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft > release-state.json; then
+            # Published releases are immutable here, including on reruns.
+            jq -e '.isDraft == true' release-state.json
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --latest=false \
+              --title "V2bX $RELEASE_TAG" --notes-file "$notes" --repo "$GITHUB_REPOSITORY"
           fi
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
-          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber \
-            --repo "$GITHUB_REPOSITORY"
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
           uploaded=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')
-          [[ "$uploaded" == 69 ]]
-          if [[ "$CREATE_RELEASE" == true ]]; then
-            gh release edit "$RELEASE_TAG" --latest --repo "$GITHUB_REPOSITORY"
-          fi
+          [[ "$uploaded" == 74 ]]
+          # Read back all draft attachments before making the release public.
+          mkdir release-readback
+          gh release download "$RELEASE_TAG" --dir release-readback --repo "$GITHUB_REPOSITORY"
+          cmp release-assets/SHA256SUMS release-readback/SHA256SUMS
+          (cd release-readback && sha256sum -c SHA256SUMS)
+          gh release edit "$RELEASE_TAG" --draft=false --latest --repo "$GITHUB_REPOSITORY"

@@ -5,6 +5,15 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      source_ref:
+        description: Immutable commit or release tag to validate
+        type: string
+        required: false
+    outputs:
+      source_sha:
+        description: Commit that passed validation
+        value: ${{ jobs.validate.outputs.source_sha }}
 
 permissions:
   contents: read
@@ -17,11 +26,18 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
     env:
       GOEXPERIMENT: jsonv2
       GOFLAGS: -tags=http2legacy,sing,xray,hysteria2,with_quic,with_grpc,with_utls,with_wireguard,with_acme,with_gvisor
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+      - name: Record validated source
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -50,11 +66,29 @@ jobs:
           V2BX_STRESS_IDLE_SECONDS: '5'
           V2BX_STRESS_REPORT: ${{ github.workspace }}/proxy-stress.json
         run: go test -count=1 -timeout 3m -run '^TestProxyStress$' -v ./limiter
+      - name: Run synchronized 128-client burst
+        env:
+          V2BX_STRESS: '1'
+          V2BX_STRESS_SECONDS: '3'
+          V2BX_STRESS_CONCURRENCY: '128'
+          V2BX_STRESS_REPORT: ${{ github.workspace }}/proxy-stress-burst.json
+        run: go test -count=1 -timeout 3m -run '^TestProxyStress$' -v ./limiter
+      - name: Observe natural memory recovery with nodes running
+        env:
+          V2BX_STRESS: '1'
+          V2BX_STRESS_SECONDS: '3'
+          V2BX_STRESS_CONCURRENCY: '32'
+          V2BX_STRESS_IDLE_SECONDS: '180'
+          V2BX_STRESS_REPORT: ${{ github.workspace }}/proxy-memory-natural.json
+        run: go test -count=1 -timeout 12m -run '^TestProxyStress$/.*/churn$' -v ./limiter
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: linux-proxy-stress
-          path: proxy-stress.json
+          path: |
+            proxy-stress.json
+            proxy-stress-burst.json
+            proxy-memory-natural.json
           if-no-files-found: warn
       - name: Verify upgrade and rollback
         run: |
@@ -63,5 +97,7 @@ jobs:
           bash -n scripts/upgrade-security.sh
           bash -n scripts/mitigate-mptcp.sh
           python3 scripts/tests/upgrade-security-test.py
+          bash -n scripts/update-security.sh
+          python3 scripts/tests/update-security-test.py
       - name: Run vet
         run: go vet ./...
