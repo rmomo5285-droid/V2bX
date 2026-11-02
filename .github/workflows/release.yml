@@ -283,4 +283,7 @@ jobs:
           gh release download "$RELEASE_TAG" --dir release-readback --repo "$GITHUB_REPOSITORY"
           cmp release-assets/SHA256SUMS release-readback/SHA256SUMS
           (cd release-readback && sha256sum -c SHA256SUMS)
-          gh release edit "$RELEASE_TAG" --draft=false --latest --repo "$GITHUB_REPOSITORY"
+          # Independent runs can expose capacity failures even when this run
+          # passed. A maintainer must review all checks for VALIDATED_SHA before
+          # explicitly publishing this verified draft.
+          echo "Verified draft ready for cross-run review: $RELEASE_TAG ($VALIDATED_SHA)"

@@ -28,6 +28,7 @@ type stressResult struct {
 	Core                      string           `json:"core"`
 	Round                     int              `json:"round"`
 	Mode                      string           `json:"mode"`
+	ProcessModel              string           `json:"process_model"`
 	Concurrency               int              `json:"concurrency"`
 	PayloadBytes              int              `json:"payload_bytes"`
 	ChurnRateLimit            int              `json:"churn_rate_limit_per_second"`
@@ -224,10 +225,14 @@ func TestProxyStress(t *testing.T) {
 
 func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, size int, duration time.Duration, churnRate int) stressResult {
 	t.Helper()
+	if os.Getenv("V2BX_STRESS_ISOLATE_CLIENTS") == "1" && os.Getenv("V2BX_STRESS_CLIENT_HELPER") != "1" {
+		return runIsolatedProxyStress(t, f, mode, concurrency, size, duration, churnRate)
+	}
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 	r := stressResult{Core: f.kind, Mode: mode, Concurrency: concurrency, PayloadBytes: size, HeapBeforeBytes: before.HeapAlloc, PeakHeapBytes: before.HeapAlloc, GoroutinesBefore: runtime.NumGoroutine()}
+	r.ProcessModel = "single-process-clients-server-echo"
 	r.SessionMode = "new-transport-per-connection"
 	reuseQUIC := f.kind == "hysteria2" && mode == "churn" && os.Getenv("V2BX_STRESS_FRESH_QUIC") != "1"
 	if reuseQUIC {
@@ -262,6 +267,9 @@ func runProxyStress(t *testing.T, f *proxyFixture, mode string, concurrency, siz
 		ticker := time.NewTicker(25 * time.Millisecond)
 		defer ticker.Stop()
 		drain := func() {
+			if f.backend == nil { // Client-only subprocess; the parent owns counters.
+				return
+			}
 			rows, err := f.backend.GetUserTrafficSlice(f.tag, true)
 			if err != nil {
 				recordError(err)

@@ -1,0 +1,52 @@
+name: Compare shared and isolated stress clients
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [audit/security-xboard-20261102]
+    paths:
+      - limiter/proxy_stress_process_test.go
+      - .github/workflows/stress-process-comparison.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        isolate: ['0', '1']
+        procs: ['1', '2']
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GOEXPERIMENT: jsonv2
+      GOFLAGS: -tags=http2legacy,sing,xray,hysteria2,with_quic,with_grpc,with_utls,with_wireguard,with_acme,with_gvisor
+      GOMAXPROCS: ${{ matrix.procs }}
+      V2BX_STRESS: '1'
+      V2BX_STRESS_SECONDS: '3'
+      V2BX_STRESS_CONCURRENCY: '128'
+      V2BX_STRESS_ROUNDS: '5'
+      V2BX_STRESS_ISOLATE_CLIENTS: ${{ matrix.isolate }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Compare without retries or queue changes
+        shell: bash
+        run: |
+          set -o pipefail
+          for sample in 1 2 3; do
+            export V2BX_STRESS_REPORT="$PWD/compare-$sample.json"
+            go test -count=1 -timeout 3m -run '^TestProxyStress/hysteria2/churn$' -v ./limiter 2>&1 | tee "compare-$sample.log"
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: stress-process-comparison-${{ matrix.isolate }}-${{ matrix.procs }}
+          path: |
+            compare-*.json
+            compare-*.log
