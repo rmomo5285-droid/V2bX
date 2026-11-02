@@ -24,6 +24,13 @@ Linux 全测试、race、真实 TCP socket 协议检查、QUIC trailer 回归、
 [Actions run 41473791934](https://github.com/rmomo5285-droid/V2bX/actions/runs/41473791934)。
 原始数据与 RSS/堆内存结果见 `validation-linux-20261102.md`。随后文档与发布工作流的调整不改动应用源码；版本标签发布仍重新执行该标签源码的完整验证。
 
+标签首轮多架构构建发现 Android 的 `anet` 依赖使用 Go 私有 `net.zoneCache`，
+缺少上游要求的 Go 1.23+ 链接参数。发布工作流仅为 Android 添加
+`-checklinkname=0`，其他平台保留默认检查；不修改应用依赖或源码。
+固定后的工作流可通过 `release_tag` 手动输入重新验证、构建已有标签，
+所有检出仍固定到通过验证的标签提交。Android 只做交叉编译，未验证设备运行。
+参考：[anet 官方构建说明](https://github.com/wlynxg/anet#how-to-build-with-go-1230-or-later)。
+
 ## 保留边界
 
 待确认流量仅在进程内存；崩溃、进程重启或全局重建控制器仍可能丢失。面板未提供幂等键，丢失应答后的跨周期重试可能重复计费。删除用户与最后一次数据包并发时也不能保证逐字节精确结算。新配置及回退都失败时需人工恢复，不能保证无中断。
