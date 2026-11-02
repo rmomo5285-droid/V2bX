@@ -1,6 +1,6 @@
 # 安全版本升级
 
-`scripts/update-security.sh` 固定下载 `v0.1.3-security.5`，按 Linux 架构选择
+`scripts/update-security.sh` 固定下载 `v0.1.3-security.6`，按 Linux 架构选择
 Release 压缩包，分别校验压缩包及离线升级助手的 SHA-256，再调用助手。
 入口脚本本身应使用发布后确认的固定 SHA-256 校验；不能直接执行未校验的网络响应。
 同一 GitHub Release 提供文件与校验值，可以发现损坏及错包，不能抵御整个发布账号被入侵。

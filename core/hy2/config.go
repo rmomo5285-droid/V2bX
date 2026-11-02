@@ -3,6 +3,7 @@ package hy2
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -25,9 +26,17 @@ import (
 )
 
 type masqHandlerLogWrapper struct {
-	H      http.Handler
-	QUIC   bool
-	Logger *zap.Logger
+	H       http.Handler
+	QUIC    bool
+	Logger  *zap.Logger
+	cleanup io.Closer
+}
+
+func (m *masqHandlerLogWrapper) Close() error {
+	if m.cleanup != nil {
+		return m.cleanup.Close()
+	}
+	return nil
 }
 
 func (m *masqHandlerLogWrapper) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +305,7 @@ func (n *Hysteria2node) getOutboundConfig(c *serverConfig) (server.Outbound, err
 	return Outbound, nil
 }
 
-func (n *Hysteria2node) getMasqHandler(tlsconfig *server.TLSConfig, conn net.PacketConn, c *serverConfig) (http.Handler, error) {
+func (n *Hysteria2node) getMasqHandler(tlsconfig *server.TLSConfig, conn net.PacketConn, c *serverConfig) (*masqHandlerLogWrapper, error) {
 	var handler http.Handler
 	switch strings.ToLower(c.Masquerade.Type) {
 	case "", "404":
@@ -377,7 +386,11 @@ func (n *Hysteria2node) getMasqHandler(tlsconfig *server.TLSConfig, conn net.Pac
 			},
 			ForceHTTPS: c.Masquerade.ForceHTTPS,
 		}
-		go runMasqTCPServer(&s, c.Masquerade.ListenHTTP, c.Masquerade.ListenHTTPS, n.Logger)
+		owned, err := startMasqueradeServers(&s, c.Masquerade.ListenHTTP, c.Masquerade.ListenHTTPS, n.Logger)
+		if err != nil {
+			return nil, err
+		}
+		MasqHandler.cleanup = owned
 	}
 
 	return MasqHandler, nil
@@ -434,29 +447,10 @@ func (n *Hysteria2node) getHyConfig(info *panel.NodeInfo, config *conf.Options, 
 		EventLogger:           n.EventLogger,
 		TrafficLogger:         n.TrafficLogger,
 		MasqHandler:           Masq,
+		Cleanup:               Masq,
 	}
 	keepConn = true
 	return result, nil
-}
-
-func runMasqTCPServer(s *masq.MasqTCPServer, httpAddr, httpsAddr string, logger *zap.Logger) {
-	errChan := make(chan error, 2)
-	if httpAddr != "" {
-		go func() {
-			logger.Info("masquerade HTTP server up and running", zap.String("listen", httpAddr))
-			errChan <- s.ListenAndServeHTTP(httpAddr)
-		}()
-	}
-	if httpsAddr != "" {
-		go func() {
-			logger.Info("masquerade HTTPS server up and running", zap.String("listen", httpsAddr))
-			errChan <- s.ListenAndServeHTTPS(httpsAddr)
-		}()
-	}
-	err := <-errChan
-	if err != nil {
-		logger.Fatal("failed to serve masquerade HTTP(S)", zap.Error(err))
-	}
 }
 
 func extractPortFromAddr(addr string) int {

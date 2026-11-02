@@ -70,6 +70,12 @@ func (h *Hysteria2) AddNode(tag string, info *panel.NodeInfo, config *conf.Optio
 	}
 	s, err := server.NewServer(hyconfig)
 	if err != nil {
+		// NewServer also has validation errors before its listener cleanup path.
+		// Both resources are owned by this attempted node, never by other nodes.
+		if hyconfig.Cleanup != nil {
+			_ = hyconfig.Cleanup.Close()
+		}
+		_ = hyconfig.Conn.Close()
 		return err
 	}
 	n.Hy2server = s

@@ -55,7 +55,8 @@ func (l *serverLogger) Connect(addr net.Addr, uuid string, tx uint64) {
 	uuid = authUser(uuid)
 	limiterinfo, err := limiter.GetLimiter(l.Tag)
 	if err != nil {
-		l.logger.Panic("Get limiter error", zap.String("tag", l.Tag), zap.Error(err))
+		l.logger.Debug("Ignoring callback for removed node", zap.String("tag", l.Tag))
+		return
 	}
 	if _, r := limiterinfo.CheckLimit(format.UserTag(l.Tag, uuid), extractIPFromAddr(addr), addr.Network() == "tcp", true); r {
 		if userLimit, ok := limiterinfo.UserLimitInfo.Load(format.UserTag(l.Tag, uuid)); ok {
@@ -86,7 +87,8 @@ func (l *serverLogger) TCPRequest(addr net.Addr, uuid, reqAddr string) {
 	uuid = authUser(uuid)
 	limiterinfo, err := limiter.GetLimiter(l.Tag)
 	if err != nil {
-		l.logger.Panic("Get limiter error", zap.String("tag", l.Tag), zap.Error(err))
+		l.logger.Debug("Ignoring callback for removed node", zap.String("tag", l.Tag))
+		return
 	}
 	l.trackDevice(authID, uuid, addr, limiterinfo, false)
 	if _, r := limiterinfo.CheckLimit(format.UserTag(l.Tag, uuid), extractIPFromAddr(addr), addr.Network() == "tcp", true); r {
@@ -121,7 +123,8 @@ func (l *serverLogger) UDPRequest(addr net.Addr, uuid string, sessionId uint32, 
 	uuid = authUser(uuid)
 	limiterinfo, err := limiter.GetLimiter(l.Tag)
 	if err != nil {
-		l.logger.Panic("Get limiter error", zap.String("tag", l.Tag), zap.Error(err))
+		l.logger.Debug("Ignoring callback for removed node", zap.String("tag", l.Tag))
+		return
 	}
 	l.trackDevice(authID, uuid, addr, limiterinfo, false)
 	taguuid := format.UserTag(l.Tag, uuid)

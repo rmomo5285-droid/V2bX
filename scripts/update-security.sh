@@ -2,7 +2,7 @@
 # Download a fixed release, verify both downloads, then use the rollback helper.
 set -Eeuo pipefail
 umask 077
-release='v0.1.3-security.5'
+release='v0.1.3-security.6'
 repository='rmomo5285-droid/V2bX'
 [[ $(uname -s) == Linux ]] || { echo 'Linux/systemd required.' >&2; exit 1; }
 case "$(uname -m)" in
