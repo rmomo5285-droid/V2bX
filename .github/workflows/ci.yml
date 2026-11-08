@@ -24,6 +24,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  accounting:
+    uses: ./.github/workflows/vision-accounting.yml
+    with:
+      source_ref: ${{ inputs.source_ref || github.sha }}
+
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 45

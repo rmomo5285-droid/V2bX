@@ -35,10 +35,10 @@ import (
 	xconf "github.com/xtls/xray-core/infra/conf"
 )
 
-// This is a diagnostic, not an assertion that Vision has a fixed loss ratio.
+// Regress the live HTTP reporting path, not just the final in-memory counter.
 // Run each flow/splice combination in its own process: Xray's environment and
-// logging settings are process-wide. The Linux workflow verifies the actual
-// splice log marker; Windows results cannot establish Linux splice behavior.
+// logging settings are process-wide. Linux must exercise the accounted copy
+// path even when raw splice is enabled globally and no speed limit is set.
 func TestVisionDownloadAccounting(t *testing.T) {
 	if os.Getenv("V2BX_ACCOUNTING") != "1" {
 		t.Skip("opt in with V2BX_ACCOUNTING=1; localhost only")
@@ -231,10 +231,8 @@ func TestVisionDownloadAccounting(t *testing.T) {
 		observation := map[string]int64{"target_wire_bytes": wire.Load(), "panel_download_bytes": reported.Load(), "core_buffered_download_bytes": buffered, "http_pushes": reports.Load()}
 		phases = append(phases, observation)
 		t.Logf("OPEN_PHASE_%d %+v", phase+1, observation)
-		if flow == "" || splice == "disable" || runtime.GOOS != "linux" {
-			if reported.Load() < wire.Load()-256 {
-				t.Errorf("non-splice accounting delayed: panel=%d target=%d", reported.Load(), wire.Load())
-			}
+		if reported.Load() < wire.Load()-256 || reported.Load() > wire.Load()+256 {
+			t.Errorf("live accounting differs while connection is open: panel=%d target=%d", reported.Load(), wire.Load())
 		}
 		if phase == 0 {
 			nextOnce.Do(func() { close(next) })
@@ -268,11 +266,13 @@ func TestVisionDownloadAccounting(t *testing.T) {
 	}
 	enteredSplice := bytes.Contains(logData, []byte("CopyRawConn splice"))
 	result["splice_observed"] = enteredSplice
-	if runtime.GOOS == "linux" && flow != "" && splice == "auto" && !enteredSplice {
-		t.Error("Vision auto diagnostic did not enter splice; result cannot validate the reported path")
+	accountedCopy := bytes.Contains(logData, []byte("CopyRawConn (maybe) readv"))
+	result["accounted_copy_observed"] = accountedCopy
+	if runtime.GOOS == "linux" && flow != "" && splice == "auto" && !accountedCopy {
+		t.Error("Vision auto did not exercise the accounted copy path")
 	}
-	if splice == "disable" && enteredSplice {
-		t.Error("splice-disable control still entered splice")
+	if enteredSplice {
+		t.Error("managed connection bypassed live accounting through raw splice")
 	}
 	if final < expected-256 || final > expected+256 {
 		t.Errorf("accounting after target EOF differs: panel=%d target=%d", final, expected)

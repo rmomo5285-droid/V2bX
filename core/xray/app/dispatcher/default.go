@@ -212,8 +212,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 		}
 		lm.AddLink(managedWriter, outboundLink.Reader)
 		inboundLink.Writer = managedWriter
+		// Raw TCP splice bypasses our counter, online and connection-management
+		// wrappers. Even an exposed SizeStatWriter is credited only after EOF.
+		// All managed users need per-buffer accounting, including unlimited ones.
+		sessionInbound.CanSpliceCopy = 3
 		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
 			inboundLink.Writer = rate.NewRateLimitWriter(inboundLink.Writer, w)
 			outboundLink.Writer = rate.NewRateLimitWriter(outboundLink.Writer, w)
 		}
@@ -392,8 +395,10 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			manager: lm,
 		}
 		outbound.Writer = managedWriter
+		// Match getLink: a user without a speed limit still requires live
+		// accounting and revocation through the managed reader/writer chain.
+		sessionInbound.CanSpliceCopy = 3
 		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
 			outbound.Writer = rate.NewRateLimitWriter(outbound.Writer, w)
 		}
 		t := counter.LoadOrCreate(&d.Counter, sessionInbound.Tag)

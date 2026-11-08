@@ -1,12 +1,20 @@
-name: Diagnose Vision download accounting
+name: Verify live Vision download accounting
 
 on:
-  push:
-    branches: ['audit/vision-accounting-*']
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_ref:
+        description: Immutable commit or release tag to validate
+        type: string
+        required: false
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-vision-accounting
+  cancel-in-progress: true
 
 jobs:
   accounting:
@@ -34,6 +42,8 @@ jobs:
       V2BX_ACCOUNTING_REPORT: ${{ github.workspace }}/accounting-${{ matrix.name }}.json
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -41,8 +51,10 @@ jobs:
       - name: Record source and validate formatting
         run: |
           git rev-parse HEAD
-          test -z "$(gofmt -l limiter/vision_accounting_test.go)"
+          test -z "$(gofmt -l limiter/vision_accounting_test.go core/xray/app/dispatcher/default.go core/xray/app/dispatcher/accounting_test.go)"
           git diff --check
+      - name: Verify both dispatcher entry points and counter drains
+        run: go test -count=1 -race ./common/counter ./core/xray/app/dispatcher
       - name: Download over a real TLS VLESS connection and capture HTTP pushes
         shell: bash
         run: |
