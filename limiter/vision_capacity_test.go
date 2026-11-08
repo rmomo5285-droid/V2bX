@@ -433,6 +433,20 @@ func TestVisionCapacity(t *testing.T) {
 				}(uid)
 			}
 		}
+		// Admission intentionally caps simultaneous handshakes at 32. Measure
+		// startup separately: 1,200 TLS-over-Vision streams share one CPU with
+		// clients, target and log probes, so 20s is not a steady-state deadline.
+		warmupDeadline := time.Now().Add(60 * time.Second)
+		for ready.Load() != int64(users*streams) && time.Now().Before(warmupDeadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		warmup := map[string]any{"round": round, "stage": "warmup", "seconds": time.Since(start).Seconds(), "ready_connections": ready.Load(), "expected_connections": users * streams}
+		samples = append(samples, warmup)
+		warmupData, _ := json.Marshal(warmup)
+		t.Log("CAPACITY_WARMUP " + string(warmupData))
+		if ready.Load() != int64(users*streams) {
+			t.Errorf("connection warmup exceeded 60s: ready=%d expected=%d", ready.Load(), users*streams)
+		}
 		ticker := time.NewTicker(time.Second)
 		for elapsed := 1; elapsed <= seconds; elapsed++ {
 			<-ticker.C

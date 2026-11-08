@@ -83,6 +83,7 @@ jobs:
               compact = {k: data[k] for k in ['users', 'connections_per_user', 'rounds', 'splice', 'accesslog_scenario', 'accesslog_requests', 'accesslog_header_hangs', 'accesslog_body_hangs', 'failures', 'first_errors']}
               compact['idle'] = [s for s in data['samples'] if s.get('stage') == 'idle']
               compact['quiescent'] = [s for s in data['samples'] if s.get('stage') == 'quiescent']
+              compact['warmup'] = [s for s in data['samples'] if s.get('stage') == 'warmup']
               print('::notice title=Vision capacity measurements::' + json.dumps(compact, separators=(',', ':')))
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
                   summary.write('```json\n' + json.dumps(compact, indent=2) + '\n```\n')
