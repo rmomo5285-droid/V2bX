@@ -64,7 +64,7 @@ actual=$(sha256sum "$archive"); actual=${actual%% *}
 unzip -p "$archive" V2bX > "$temp/V2bX"
 chmod 0700 "$temp/V2bX"
 "$temp/V2bX" version > "$temp/version.txt"
-grep -qF 'V2bX v0.1.3-security.6 (' "$temp/version.txt" || {
+grep -qF 'V2bX v0.1.3-security.7 (' "$temp/version.txt" || {
     echo 'Unexpected executable/version; service unchanged.' >&2; exit 1;
 }
 backup="$state/backup-$(date -u +%Y%m%dT%H%M%SZ)-$$"
