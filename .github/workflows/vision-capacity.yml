@@ -41,6 +41,7 @@ jobs:
         run: |
           mkdir -p capacity-results
           docker create --name vision-capacity --cpus=1 --memory=1g --memory-swap=1g \
+            --user "$(id -u):$(id -g)" \
             --ulimit nofile=65536:65536 --pids-limit=4096 \
             -v "$PWD:/test" -w /test \
             -e GOMAXPROCS=1 -e GOMEMLIMIT=768MiB \
@@ -81,6 +82,7 @@ jobs:
               data = json.loads(path.read_text())
               compact = {k: data[k] for k in ['users', 'connections_per_user', 'rounds', 'splice', 'accesslog_scenario', 'accesslog_requests', 'accesslog_header_hangs', 'accesslog_body_hangs', 'failures', 'first_errors']}
               compact['idle'] = [s for s in data['samples'] if s.get('stage') == 'idle']
+              compact['quiescent'] = [s for s in data['samples'] if s.get('stage') == 'quiescent']
               print('::notice title=Vision capacity measurements::' + json.dumps(compact, separators=(',', ':')))
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
                   summary.write('```json\n' + json.dumps(compact, indent=2) + '\n```\n')
