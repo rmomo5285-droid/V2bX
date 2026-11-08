@@ -118,6 +118,38 @@ TTL time + INTERVAL 7 DAY DELETE;
 `dropped` 是队列满/退出期间丢弃。未提供持久化队列和精确一次交付。
 关停最多等待约 3 秒，随后取消请求并清理缓冲。统计每 30 秒更新，重启后重新计数。
 
+上述计数都是本进程启动后的累计值，历史 `uncertain` 非零不能证明当前仍在
+超时。告警改为只在本次 30 秒统计窗口新增 failed/uncertain/dropped 时记录，
+同时提供 `interval_failed`、`interval_uncertain`、`interval_dropped`；恢复发送
+后记录一次 info，不再每 30 秒重复历史错误。累计值仍保留在状态文件中。
+`last_error_kind` 和 `last_failure` 保留最近错误的分类与时间，区分 timeout、
+response_timeout、dns_timeout、HTTP 拒绝及异常正文，不保存原始错误、URL、
+请求头、凭据或事件正文。HTTP 200 仅代表最近一次收到的状态码，响应正文读取
+超时仍计 uncertain。
+
+## 与计费同时运行的超时压力验证
+
+`vision-capacity.yml` 包含 `timeout-recovery` 场景：保持 150/300 个不同 UID、
+每用户 4 条真实 TLS Vision 下载连接，另以 4 个 worker 提供最多 50 次/秒
+真实短连接。访问事件从 Xray 路由钩子产生，不直接向队列填造事件。
+所有日志参数保持生产默认值。日志接口先正常，再交替卡住响应头、2xx 后的
+响应体，最后恢复；流量 push、用户拉取和设备心跳同时运行。
+
+测试要求触发 uncertain 和 dropped，队列不超过 256 条/256 KiB，恢复后
+Sent 继续增加，空闲后队列排空；长连接期间 push 年龄不能超过 10 秒，用户
+设备数必须匹配。每个容器复用节点三轮，禁止通过重启或显式 GC 清场。
+日志超时不等于流量接口超时；生产环境应区分 `Access log delivery status`
+与 `Report user traffic failed`、`Get user list failed`，再检查对应接口。
+
+2026-11-08 Windows 的 150 UID 测试（GOMAXPROCS=1，70 秒活跃、70 秒空闲）
+通过，600 条长连接外完成 3,456 条短连接，0 个客户端错误；日志排队峰值
+256 条/45,312 估算字节，1,676 条 dropped、132 条 uncertain，恢复后 Sent
+增加至 2,248。流量报告年龄采样低于 1 秒，在线设备 150，空闲后设备及受管理
+连接均为 0。进程 RSS 采样约 365–376 MB，包含客户端、目标及模拟面板；
+不是节点单独内存，也不是 Linux 1 GiB cgroup 或真实服务器容量结论。
+Linux 对照结果需查看对应修复提交的 Actions 工件，不能用这轮 Windows
+结果宣称生产 timeout 已定位或修复。
+
 ```bash
 /usr/local/V2bX/V2bX accesslog status
 journalctl -u V2bX --since '10 minutes ago'

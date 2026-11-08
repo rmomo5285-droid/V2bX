@@ -226,3 +226,19 @@ func (c *Xray) Protocols() []string {
 func (c *Xray) Type() string {
 	return "xray"
 }
+
+// ManagedLinks reports registrations retained by the connection manager. It is
+// useful when distinguishing live load from stale connections after disconnect.
+func (c *Xray) ManagedLinks() int {
+	c.access.Lock()
+	defer c.access.Unlock()
+	if c.dispatcher == nil {
+		return 0
+	}
+	count := 0
+	c.dispatcher.LinkManagers.Range(func(_, value any) bool {
+		count += value.(*dispatcher.LinkManager).Len()
+		return true
+	})
+	return count
+}

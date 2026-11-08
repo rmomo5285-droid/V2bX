@@ -197,26 +197,14 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			common.Interrupt(inboundLink.Reader)
 			return nil, nil, nil, errors.New("Limited ", user.Email, " by conn or ip")
 		}
-		var lm *LinkManager
-		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
-			lm = &LinkManager{
-				links: make(map[*ManagedWriter]buf.Reader),
-			}
-			d.LinkManagers.Store(user.Email, lm)
-		} else {
-			lm = lmloaded.(*LinkManager)
+		var abort func()
+		if sessionInbound.Conn != nil {
+			abort = func() { sessionInbound.Conn.Close() }
 		}
-		managedWriter := &ManagedWriter{
-			writer:  uplinkWriter,
-			manager: lm,
-		}
-		lm.AddLink(managedWriter, outboundLink.Reader)
+		managedWriter := d.manageLink(ctx, user.Email, uplinkWriter, outboundLink.Reader, abort)
 		inboundLink.Writer = managedWriter
-		// Raw TCP splice bypasses our counter, online and connection-management
-		// wrappers. Even an exposed SizeStatWriter is credited only after EOF.
-		// All managed users need per-buffer accounting, including unlimited ones.
-		sessionInbound.CanSpliceCopy = 3
 		if w != nil {
+			sessionInbound.CanSpliceCopy = 3
 			inboundLink.Writer = rate.NewRateLimitWriter(inboundLink.Writer, w)
 			outboundLink.Writer = rate.NewRateLimitWriter(outboundLink.Writer, w)
 		}
@@ -381,24 +369,14 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			common.Interrupt(outbound.Reader)
 			return errors.New("Limited ", user.Email, " by conn or ip")
 		}
-		var lm *LinkManager
-		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
-			lm = &LinkManager{
-				links: make(map[*ManagedWriter]buf.Reader),
-			}
-			d.LinkManagers.Store(user.Email, lm)
-		} else {
-			lm = lmloaded.(*LinkManager)
+		var abort func()
+		if sessionInbound.Conn != nil {
+			abort = func() { sessionInbound.Conn.Close() }
 		}
-		managedWriter := &ManagedWriter{
-			writer:  outbound.Writer,
-			manager: lm,
-		}
+		managedWriter := d.manageLink(ctx, user.Email, outbound.Writer, outbound.Reader, abort)
 		outbound.Writer = managedWriter
-		// Match getLink: a user without a speed limit still requires live
-		// accounting and revocation through the managed reader/writer chain.
-		sessionInbound.CanSpliceCopy = 3
 		if w != nil {
+			sessionInbound.CanSpliceCopy = 3
 			outbound.Writer = rate.NewRateLimitWriter(outbound.Writer, w)
 		}
 		t := counter.LoadOrCreate(&d.Counter, sessionInbound.Tag)
@@ -409,7 +387,6 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			Reader:  &buf.TimeoutWrapperReader{Reader: outbound.Reader},
 			Counter: &ts.UpCounter,
 		}
-		lm.AddLink(managedWriter, outbound.Reader)
 		outbound.Writer = &dispatcher.SizeStatWriter{
 			Counter: downcounter,
 			Writer:  outbound.Writer,

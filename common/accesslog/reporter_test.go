@@ -9,7 +9,111 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	log "github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 )
+
+func TestHistoricalErrorsWarnOnceAndRecoveryIsReported(t *testing.T) {
+	var reject atomic.Bool
+	reject.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		io.Copy(io.Discard, req.Body)
+		if reject.Load() {
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer server.Close()
+	cfg := testConfig(server.URL)
+	cfg.BatchSize = 1
+	cfg, err := cfg.Prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldHooks := log.StandardLogger().ReplaceHooks(make(log.LevelHooks))
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(oldHooks) })
+	r := newReporter(cfg, "")
+	defer r.Close()
+	r.Try(event(t))
+	awaitStats(t, r, func(s Stats) bool { return s.Failed == 1 })
+	previous, degraded := r.reportStatus(Stats{}, false)
+	entry := hook.LastEntry()
+	if entry == nil || entry.Level != log.WarnLevel || entry.Data["interval_failed"] != uint64(1) {
+		t.Fatal("new failure was not warned")
+	}
+	hook.Reset()
+	previous, degraded = r.reportStatus(previous, degraded)
+	if hook.LastEntry() != nil {
+		t.Fatal("unchanged historical failure warned again")
+	}
+	reject.Store(false)
+	r.Try(event(t))
+	awaitStats(t, r, func(s Stats) bool { return s.Sent == 1 })
+	previous, degraded = r.reportStatus(previous, degraded)
+	entry = hook.LastEntry()
+	if entry == nil || entry.Level != log.InfoLevel || entry.Message != "Access log delivery recovered" || degraded {
+		t.Fatal("recovery was not reported")
+	}
+	hook.Reset()
+	previous, degraded = r.reportStatus(previous, degraded)
+	if hook.LastEntry() != nil {
+		t.Fatal("healthy interval repeated old warning")
+	}
+	reject.Store(true)
+	r.Try(event(t))
+	awaitStats(t, r, func(s Stats) bool { return s.Failed == 2 })
+	r.reportStatus(previous, degraded)
+	entry = hook.LastEntry()
+	if entry == nil || entry.Level != log.WarnLevel || entry.Data["interval_failed"] != uint64(1) {
+		t.Fatal("new failure after recovery was hidden")
+	}
+}
+
+func TestHeaderAndBodyTimeoutsRecoverWithoutRetry(t *testing.T) {
+	for _, body := range []bool{false, true} {
+		t.Run(map[bool]string{false: "headers", true: "body"}[body], func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				io.Copy(io.Discard, req.Body)
+				if requests.Add(1) == 1 {
+					if body {
+						w.WriteHeader(http.StatusOK)
+						w.(http.Flusher).Flush()
+					}
+					<-req.Context().Done()
+				}
+			}))
+			defer server.Close()
+			cfg := testConfig(server.URL)
+			cfg.BatchSize = 1
+			cfg, err := cfg.Prepare()
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := newReporter(cfg, "")
+			defer r.Close()
+			r.Try(event(t))
+			stats := awaitStats(t, r, func(s Stats) bool { return s.Uncertain == 1 })
+			wantKind := "timeout"
+			if body {
+				wantKind = "response_timeout"
+			}
+			if stats.LastErrorKind != wantKind || stats.LastFailure.IsZero() {
+				t.Fatalf("wrong error classification: %+v", stats)
+			}
+			time.Sleep(250 * time.Millisecond)
+			if requests.Load() != 1 {
+				t.Fatal("ambiguous POST retried")
+			}
+			r.Try(event(t))
+			stats = awaitStats(t, r, func(s Stats) bool { return s.Sent == 1 })
+			if stats.Uncertain != 1 || !stats.LastSuccess.After(stats.LastFailure) || requests.Load() != 2 {
+				t.Fatal("delivery did not recover")
+			}
+		})
+	}
+}
 
 func testConfig(endpoint string) Config {
 	return Config{Enabled: true, Endpoint: endpoint, Username: "writer", Password: "test-secret", FlushInterval: "100ms", RequestTimeout: "200ms", BatchSize: 2}

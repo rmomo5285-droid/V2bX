@@ -9,6 +9,7 @@ import (
 	"github.com/InazumaV/V2bX/limiter"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/transport"
 )
 
@@ -65,6 +66,15 @@ type onlineWriter struct {
 	buf.Writer
 	once   sync.Once
 	finish func()
+}
+
+// Online tracking observes completion, not the payload; keep the underlying
+// per-chunk user counter available to the core's zero-copy path.
+func (w *onlineWriter) SpliceCounter() stats.Counter {
+	if counted, ok := w.Writer.(interface{ SpliceCounter() stats.Counter }); ok {
+		return counted.SpliceCounter()
+	}
+	return nil
 }
 
 func (w *onlineWriter) Close() error { w.once.Do(w.finish); return common.Close(w.Writer) }

@@ -14,6 +14,7 @@ import (
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
+	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/pipe"
 )
@@ -41,8 +42,11 @@ func TestManagedTrafficAccountsBeforeClose(t *testing.T) {
 				var upload buf.Writer
 				var download buf.Reader
 				h := &testHandler{during: func(link *transport.Link) {
-					if in.CanSpliceCopy != 3 {
-						t.Fatal("managed traffic may bypass live accounting through raw splice")
+					if (speed == 0 && in.CanSpliceCopy != 2) || (speed > 0 && in.CanSpliceCopy != 3) {
+						t.Fatal("splice eligibility must preserve unlimited users and enforce rate limits")
+					}
+					if provider, ok := link.Writer.(interface{ SpliceCounter() stats.Counter }); !ok || provider.SpliceCounter() == nil {
+						t.Fatal("online wrapper hid the splice counter")
 					}
 					ts := counter.LoadOrCreate(&d.Counter, tag).GetCounter(email)
 					for phase := 0; phase < 2; phase++ {

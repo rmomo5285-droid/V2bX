@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 )
 
@@ -14,24 +15,29 @@ type CounterReader struct {
 	Counter *atomic.Int64
 }
 
-func (c *CounterReader) ReadMultiBufferTimeout(time.Duration) (buf.MultiBuffer, error) {
-	mb, err := c.Reader.ReadMultiBufferTimeout(time.Second)
-	if err != nil {
-		return nil, err
-	}
+func (c *CounterReader) ReadMultiBufferTimeout(timeout time.Duration) (buf.MultiBuffer, error) {
+	mb, err := c.Reader.ReadMultiBufferTimeout(timeout)
 	if mb.Len() > 0 {
 		c.Counter.Add(int64(mb.Len()))
 	}
-	return mb, nil
+	return mb, err
 }
 
 func (c *CounterReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	mb, err := c.Reader.ReadMultiBuffer()
-	if err != nil {
-		return nil, err
-	}
 	if mb.Len() > 0 {
 		c.Counter.Add(int64(mb.Len()))
 	}
-	return mb, nil
+	return mb, err
 }
+
+// TimeoutWrapperReader does not forward lifecycle calls to its Reader. Reach
+// that reader explicitly so revocation/cancellation can release blocked reads.
+func (c *CounterReader) upstream() buf.Reader {
+	if reader, ok := c.Reader.(*buf.TimeoutWrapperReader); ok {
+		return reader.Reader
+	}
+	return c.Reader
+}
+func (c *CounterReader) Interrupt()   { common.Interrupt(c.upstream()) }
+func (c *CounterReader) Close() error { return common.Close(c.upstream()) }

@@ -264,15 +264,15 @@ func TestVisionDownloadAccounting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enteredSplice := bytes.Contains(logData, []byte("CopyRawConn splice"))
+	enteredSplice := bytes.Contains(logData, []byte("CopyRawConn counted splice"))
 	result["splice_observed"] = enteredSplice
 	accountedCopy := bytes.Contains(logData, []byte("CopyRawConn (maybe) readv"))
 	result["accounted_copy_observed"] = accountedCopy
-	if runtime.GOOS == "linux" && flow != "" && splice == "auto" && !accountedCopy {
-		t.Error("Vision auto did not exercise the accounted copy path")
+	if runtime.GOOS == "linux" && flow != "" && splice == "auto" && !enteredSplice {
+		t.Error("Vision auto did not exercise counted splice")
 	}
-	if enteredSplice {
-		t.Error("managed connection bypassed live accounting through raw splice")
+	if splice == "disable" && enteredSplice {
+		t.Error("splice-disable control entered splice")
 	}
 	if final < expected-256 || final > expected+256 {
 		t.Errorf("accounting after target EOF differs: panel=%d target=%d", final, expected)

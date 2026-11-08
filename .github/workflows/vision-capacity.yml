@@ -1,0 +1,92 @@
+name: Vision multi-user resource and heartbeat stress
+
+on:
+  push:
+    branches: ['audit/vision-accounting-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capacity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        users: [150, 300]
+        splice: [auto, disable]
+        accesslog: [disabled, timeout-recovery]
+    env:
+      GOEXPERIMENT: jsonv2
+      GOFLAGS: -tags=http2legacy,sing,xray,hysteria2,with_quic,with_grpc,with_utls,with_wireguard,with_acme,with_gvisor
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build load test before imposing runtime limits
+        run: |
+          git rev-parse HEAD
+          go test -c -o capacity.test ./limiter
+      - name: Three rounds without restart under 1 CPU and 1 GiB total memory
+        shell: bash
+        run: |
+          mkdir -p capacity-results
+          docker create --name vision-capacity --cpus=1 --memory=1g --memory-swap=1g \
+            --ulimit nofile=65536:65536 --pids-limit=4096 \
+            -v "$PWD:/test" -w /test \
+            -e GOMAXPROCS=1 -e GOMEMLIMIT=768MiB \
+            -e V2BX_CAPACITY=1 -e V2BX_CAPACITY_USERS=${{ matrix.users }} \
+            -e V2BX_CAPACITY_STREAMS=4 -e V2BX_CAPACITY_SECONDS=120 \
+            -e V2BX_CAPACITY_IDLE=70 -e V2BX_CAPACITY_ROUNDS=3 \
+            -e XRAY_BUF_SPLICE=${{ matrix.splice }} \
+            -e V2BX_CAPACITY_ACCESSLOG=${{ matrix.accesslog }} \
+            -e V2BX_CAPACITY_REPORT=/test/capacity-results/measurements.json \
+            ubuntu:24.04 ./capacity.test -test.run='^TestVisionCapacity$' -test.timeout=16m -test.v
+          docker inspect vision-capacity > capacity-results/container-before.json
+          docker start -a vision-capacity > capacity-results/test.log 2>&1 &
+          runner=$!
+          while kill -0 "$runner" 2>/dev/null; do
+            docker stats --no-stream --format '{{json .}}' vision-capacity >> capacity-results/docker-stats.jsonl || true
+            sleep 1
+          done
+          set +e
+          wait "$runner"
+          attach_status=$?
+          set -e
+          docker inspect vision-capacity > capacity-results/container-after.json
+          cat capacity-results/test.log
+          state=$(docker inspect --format '{{.State.ExitCode}}' vision-capacity)
+          oom=$(docker inspect --format '{{.State.OOMKilled}}' vision-capacity)
+          echo "container_exit=$state attach_exit=$attach_status oom_killed=$oom"
+          test "$oom" = false
+          test "$state" = 0
+          test "$attach_status" = 0
+      - name: Publish compact measured results
+        if: always()
+        shell: python
+        run: |
+          import json, os
+          from pathlib import Path
+          path = Path('capacity-results/measurements.json')
+          if path.exists():
+              data = json.loads(path.read_text())
+              compact = {k: data[k] for k in ['users', 'connections_per_user', 'rounds', 'splice', 'accesslog_scenario', 'accesslog_requests', 'accesslog_header_hangs', 'accesslog_body_hangs', 'failures', 'first_errors']}
+              compact['idle'] = [s for s in data['samples'] if s.get('stage') == 'idle']
+              print('::notice title=Vision capacity measurements::' + json.dumps(compact, separators=(',', ':')))
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write('```json\n' + json.dumps(compact, indent=2) + '\n```\n')
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: vision-capacity-${{ matrix.users }}-${{ matrix.splice }}-${{ matrix.accesslog }}
+          path: capacity-results/
+          if-no-files-found: error

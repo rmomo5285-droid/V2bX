@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -66,17 +67,19 @@ func NewEvent(nodeID, uid int, source, network, target string) (Event, bool) {
 }
 
 type Stats struct {
-	Enabled     bool      `json:"enabled"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	QueueDepth  int       `json:"queue_depth"`
-	QueuedBytes int       `json:"queued_bytes"`
-	Accepted    uint64    `json:"accepted"`
-	Sent        uint64    `json:"sent"`
-	Dropped     uint64    `json:"dropped"`
-	Failed      uint64    `json:"failed"`
-	Uncertain   uint64    `json:"uncertain"`
-	LastSuccess time.Time `json:"last_success"`
-	LastStatus  int       `json:"last_http_status"`
+	Enabled       bool      `json:"enabled"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	QueueDepth    int       `json:"queue_depth"`
+	QueuedBytes   int       `json:"queued_bytes"`
+	Accepted      uint64    `json:"accepted"`
+	Sent          uint64    `json:"sent"`
+	Dropped       uint64    `json:"dropped"`
+	Failed        uint64    `json:"failed"`
+	Uncertain     uint64    `json:"uncertain"`
+	LastSuccess   time.Time `json:"last_success"`
+	LastStatus    int       `json:"last_http_status"`
+	LastFailure   time.Time `json:"last_failure"`
+	LastErrorKind string    `json:"last_error_kind,omitempty"`
 }
 
 type Reporter struct {
@@ -118,6 +121,15 @@ func Configure(cfg Config, statusPath string) error {
 }
 
 func Enabled() bool { return active.Load() != nil }
+
+// CurrentStats exposes bounded delivery counters, never events or credentials.
+func CurrentStats() Stats {
+	if r := active.Load(); r != nil {
+		return r.Snapshot()
+	}
+	return Stats{UpdatedAt: time.Now().UTC()}
+}
+
 func Record(event Event) {
 	if r := active.Load(); r != nil {
 		r.Try(event)
@@ -211,6 +223,25 @@ func writeStatus(path string, stats Stats) {
 	}
 }
 
+// Cumulative errors remain visible in status, but must not become a fresh
+// warning every thirty seconds for the rest of the process lifetime.
+func (r *Reporter) reportStatus(previous Stats, degraded bool) (Stats, bool) {
+	s := r.Snapshot()
+	writeStatus(r.statusPath, s)
+	dropped, failed, uncertain := s.Dropped-previous.Dropped, s.Failed-previous.Failed, s.Uncertain-previous.Uncertain
+	fields := log.Fields{"sent": s.Sent, "dropped": s.Dropped, "failed": s.Failed, "uncertain": s.Uncertain, "queued": s.QueueDepth, "http_status": s.LastStatus}
+	if dropped+failed+uncertain > 0 {
+		fields["interval_dropped"], fields["interval_failed"], fields["interval_uncertain"] = dropped, failed, uncertain
+		fields["last_error_kind"], fields["last_failure"] = s.LastErrorKind, s.LastFailure
+		log.WithFields(fields).Warn("Access log delivery status")
+		degraded = true
+	} else if degraded && s.Sent > previous.Sent && s.LastSuccess.After(s.LastFailure) {
+		log.WithFields(fields).Info("Access log delivery recovered")
+		degraded = false
+	}
+	return s, degraded
+}
+
 func (r *Reporter) run() {
 	defer close(r.done)
 	defer r.cancel()
@@ -221,6 +252,8 @@ func (r *Reporter) run() {
 	defer status.Stop()
 	batch := make([]byte, 0, r.cfg.BatchMaxBytes)
 	count := 0
+	var previous Stats
+	degraded := false
 	flush := func() {
 		if count == 0 {
 			return
@@ -254,11 +287,7 @@ func (r *Reporter) run() {
 		case <-ticker.C:
 			flush()
 		case <-status.C:
-			s := r.Snapshot()
-			writeStatus(r.statusPath, s)
-			if s.Failed+s.Dropped+s.Uncertain > 0 {
-				log.WithFields(log.Fields{"sent": s.Sent, "dropped": s.Dropped, "failed": s.Failed, "uncertain": s.Uncertain, "queued": s.QueueDepth, "http_status": s.LastStatus}).Warn("Access log delivery status")
-			}
+			previous, degraded = r.reportStatus(previous, degraded)
 		case <-r.stop:
 			for {
 				select {
@@ -273,12 +302,45 @@ func (r *Reporter) run() {
 	}
 }
 
+// Never persist an error string: transport errors can embed endpoint queries.
+func deliveryErrorKind(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		if dns.Timeout() {
+			return "dns_timeout"
+		}
+		return "dns"
+	}
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
+		return "timeout"
+	}
+	var operation *net.OpError
+	if errors.As(err, &operation) && operation.Op == "dial" {
+		return "dial"
+	}
+	return "transport"
+}
+
+func (r *Reporter) markFailure(count, status int, kind string, uncertain bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if uncertain {
+		r.stats.Uncertain += uint64(count)
+	} else {
+		r.stats.Failed += uint64(count)
+	}
+	r.stats.LastStatus, r.stats.LastErrorKind = status, kind
+	r.stats.LastFailure = time.Now().UTC()
+}
+
 func (r *Reporter) send(body []byte, count int) {
 	req, err := http.NewRequestWithContext(r.ctx, http.MethodPost, r.cfg.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		r.mu.Lock()
-		r.stats.Failed += uint64(count)
-		r.mu.Unlock()
+		r.markFailure(count, 0, "request_build", false)
 		return
 	}
 	req.Header.Set("Content-Type", "application/x-ndjson")
@@ -287,25 +349,28 @@ func (r *Reporter) send(body []byte, count int) {
 	req.Header.Set("X-ClickHouse-Key", r.cfg.Password)
 	response, err := r.client.Do(req)
 	if err != nil {
-		r.mu.Lock()
-		r.stats.Uncertain += uint64(count)
-		r.stats.LastStatus = 0
-		r.mu.Unlock()
+		r.markFailure(count, 0, deliveryErrorKind(err), true)
 		return
 	}
 	defer response.Body.Close()
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, 4097))
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.stats.LastStatus = response.StatusCode
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		r.stats.Failed += uint64(count)
+		r.markFailure(count, response.StatusCode, "http_status", false)
 		return
 	}
 	if readErr != nil || len(bytes.TrimSpace(data)) != 0 || response.Header.Get("X-ClickHouse-Exception-Code") != "" {
-		r.stats.Uncertain += uint64(count)
+		kind := "unexpected_body"
+		if readErr != nil {
+			kind = "response_" + deliveryErrorKind(readErr)
+		} else if response.Header.Get("X-ClickHouse-Exception-Code") != "" {
+			kind = "clickhouse_exception"
+		}
+		r.markFailure(count, response.StatusCode, kind, true)
 		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stats.LastStatus = response.StatusCode
 	r.stats.Sent += uint64(count)
 	r.stats.LastSuccess = time.Now().UTC()
 }

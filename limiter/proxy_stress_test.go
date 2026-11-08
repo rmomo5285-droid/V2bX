@@ -73,6 +73,7 @@ type memorySnapshot struct {
 	RSS           uint64 `json:"rss_bytes"`
 	Goroutines    int    `json:"goroutines"`
 	ActiveDevices int    `json:"active_devices"`
+	ManagedLinks  int    `json:"managed_links"`
 	NumGC         uint32 `json:"num_gc"`
 }
 
@@ -85,7 +86,11 @@ func snapshotMemory(f *proxyFixture, stage string) memorySnapshot {
 			devices += len(ips)
 		}
 	}
-	return memorySnapshot{stage, m.HeapAlloc, m.HeapInuse, m.HeapIdle, m.HeapReleased, m.HeapObjects, m.StackInuse, m.Sys, stressRSS(), runtime.NumGoroutine(), devices, m.NumGC}
+	managed := 0
+	if xrayCore, ok := f.backend.(interface{ ManagedLinks() int }); ok {
+		managed = xrayCore.ManagedLinks()
+	}
+	return memorySnapshot{stage, m.HeapAlloc, m.HeapInuse, m.HeapIdle, m.HeapReleased, m.HeapObjects, m.StackInuse, m.Sys, stressRSS(), runtime.NumGoroutine(), devices, managed, m.NumGC}
 }
 
 func stressInt(t *testing.T, name string, fallback, maximum int) int {

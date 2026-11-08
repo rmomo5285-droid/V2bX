@@ -55,3 +55,18 @@ Dedicated archive and response-bound tests are run from the main module in CI.
 The local QUIC fork also omits raw header/trailer values and invalid URL paths
 from validation errors; privacy regressions cover malformed Authorization values.
 See `docs/codeql-review-20261103.md` for contextual findings that remain open.
+
+## Xray Vision live accounting
+
+`xray-core/` pins `github.com/wyx2685/xray-core` at
+`v0.0.0-20261102040409-dcfae7c4776b`, with its license retained. Changes are
+limited to `app/dispatcher/stats.go` (optional transparent counter interface)
+and `proxy/proxy.go` (per-batch counted splice, preserving activity timers).
+See `docs/vision-accounting.md` for the reproduced bypass and validation.
+
+`sing/` pins the already selected `github.com/sagernet/sing v0.8.0-beta.10`,
+with its license retained. `common/bufio/splice_linux.go` accounts consumed
+reads and successful partial writes before returning a write error. Its
+Linux regression test forces a partial write followed by a deadline and
+checks counters against actual socket contents. No module-cache edits are
+needed to build or validate these patches.

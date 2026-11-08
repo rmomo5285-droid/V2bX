@@ -55,11 +55,23 @@ jobs:
           git diff --check
       - name: Verify both dispatcher entry points and counter drains
         run: go test -count=1 -race ./common/counter ./core/xray/app/dispatcher
+      - name: Verify Linux partial-write accounting in the splice dependency
+        run: go test -count=1 -run '^TestSplicePartialWriteCounters$' github.com/sagernet/sing/common/bufio
+      - name: Install syscall tracing for the optimized path
+        if: matrix.name == 'vision-auto'
+        run: sudo apt-get update -qq && sudo apt-get install -y strace
       - name: Download over a real TLS VLESS connection and capture HTTP pushes
         shell: bash
         run: |
           set -o pipefail
-          go test -count=1 -timeout 90s -run '^TestVisionDownloadAccounting$' -v ./limiter 2>&1 | tee accounting-${{ matrix.name }}.log
+          if [[ '${{ matrix.name }}' == vision-auto ]]; then
+            go test -c -o accounting.test ./limiter
+            strace -f -e trace=splice -o accounting-syscalls.log ./accounting.test -test.timeout=90s -test.run='^TestVisionDownloadAccounting$' -test.v 2>&1 | tee accounting-${{ matrix.name }}.log
+            grep -E 'splice\(.*= [1-9][0-9]*' accounting-syscalls.log > accounting-positive-splice.log
+            test -s accounting-positive-splice.log
+          else
+            go test -count=1 -timeout 90s -run '^TestVisionDownloadAccounting$' -v ./limiter 2>&1 | tee accounting-${{ matrix.name }}.log
+          fi
       - name: Publish reproducible measurements in the check result
         if: always()
         shell: python
@@ -77,5 +89,8 @@ jobs:
         if: always()
         with:
           name: vision-accounting-${{ matrix.name }}
-          path: accounting-${{ matrix.name }}.*
+          path: |
+            accounting-${{ matrix.name }}.*
+            accounting-syscalls.log
+            accounting-positive-splice.log
           if-no-files-found: warn
