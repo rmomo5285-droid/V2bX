@@ -48,6 +48,19 @@ jobs:
         run: |
           set -o pipefail
           go test -count=1 -timeout 90s -run '^TestVisionDownloadAccounting$' -v ./limiter 2>&1 | tee accounting-${{ matrix.name }}.log
+      - name: Publish reproducible measurements in the check result
+        if: always()
+        shell: python
+        run: |
+          import json, os
+          from pathlib import Path
+          report = Path(os.environ['V2BX_ACCOUNTING_REPORT'])
+          if report.exists():
+              data = json.loads(report.read_text())
+              measurements = json.dumps(data, separators=(',', ':'))
+              print('::notice title=Vision accounting measurements::' + measurements)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write('```json\n' + json.dumps(data, indent=2) + '\n```\n')
       - uses: actions/upload-artifact@v7
         if: always()
         with:
