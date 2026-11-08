@@ -1,0 +1,56 @@
+name: Diagnose Vision download accounting
+
+on:
+  push:
+    branches: ['audit/vision-accounting-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  accounting:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: plain-vless
+            flow: ''
+            splice: auto
+          - name: vision-auto
+            flow: xtls-rprx-vision
+            splice: auto
+          - name: vision-no-splice
+            flow: xtls-rprx-vision
+            splice: disable
+    env:
+      GOEXPERIMENT: jsonv2
+      GOFLAGS: -tags=http2legacy,sing,xray,hysteria2,with_quic,with_grpc,with_utls,with_wireguard,with_acme,with_gvisor
+      V2BX_ACCOUNTING: '1'
+      V2BX_ACCOUNTING_FLOW: ${{ matrix.flow }}
+      XRAY_BUF_SPLICE: ${{ matrix.splice }}
+      V2BX_ACCOUNTING_REPORT: ${{ github.workspace }}/accounting-${{ matrix.name }}.json
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Record source and validate formatting
+        run: |
+          git rev-parse HEAD
+          test -z "$(gofmt -l limiter/vision_accounting_test.go)"
+          git diff --check
+      - name: Download over a real TLS VLESS connection and capture HTTP pushes
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -count=1 -timeout 90s -run '^TestVisionDownloadAccounting$' -v ./limiter 2>&1 | tee accounting-${{ matrix.name }}.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: vision-accounting-${{ matrix.name }}
+          path: accounting-${{ matrix.name }}.*
+          if-no-files-found: warn
