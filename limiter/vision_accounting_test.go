@@ -249,8 +249,17 @@ func TestVisionDownloadAccounting(t *testing.T) {
 	for reported.Load() < expected-256 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
+	result["panel_download_after_client_close"] = reported.Load()
+	// Closing the client-facing API is not proof that the target-facing TCP
+	// read returned: splice can still be waiting for a new read or EOF. Force
+	// target EOF separately to distinguish delayed accounting from lost bytes.
+	target.CloseClientConnections()
+	deadline = time.Now().Add(8 * time.Second)
+	for reported.Load() < expected-256 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
 	final := reported.Load()
-	result["panel_download_after_close"] = final
+	result["panel_download_after_target_eof"] = final
 	result["target_wire_before_close"] = expected
 	result["http_pushes"] = reports.Load()
 	logData, err := os.ReadFile(logFile)
@@ -266,7 +275,7 @@ func TestVisionDownloadAccounting(t *testing.T) {
 		t.Error("splice-disable control still entered splice")
 	}
 	if final < expected-256 || final > expected+256 {
-		t.Errorf("accounting after close differs: panel=%d target=%d", final, expected)
+		t.Errorf("accounting after target EOF differs: panel=%d target=%d", final, expected)
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	t.Log("ACCOUNTING_RESULT " + string(data))
